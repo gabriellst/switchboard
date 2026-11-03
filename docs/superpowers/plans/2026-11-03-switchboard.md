@@ -767,7 +767,7 @@ test('startedAt(s) devolve agent.startedAt em ms', ...)
 **Interfaces:**
 - Consumes: `resolveMuxForDir` (12); `checkSettingsTarget`, `muxLink` (7); `cleanEnv`, `claudeBin` (5).
 - Produces:
-  - `launchArgs(cfg, paths, o: { mux?: string; cwd: string; mode: 'agents' } | { mux?: string; cwd: string; mode: 'run'; args: string[] }): { mux: string; argv: string[] }` — `agents`: `['agents', '--cwd', <root expandido>, '--settings', muxLink]`; `run`: `[...args, '--settings', muxLink]`; recusa `args` que já tragam `--settings` (exit 3).
+  - `launchArgs(cfg, paths, o: { mux?: string; cwd: string; mode: 'agents' } | { mux?: string; cwd: string; mode: 'run'; args: string[] }): { mux: string; argv: string[] }` — `agents`: `['agents', '--cwd', <root expandido>, '--settings', muxLink]`; `run`: `--settings muxLink` entra ANTES do primeiro `--` solto de `args` (o `claude` lê tudo depois de um `--` como posicional; `[...args,'--settings',link]` com um `--` interno faria o claude rodar SEM settings, no keychain = berzerk — ruling do controlador após a revisão da Task 16) e é anexado ao fim só quando não há `--` em `args`; NÃO colocar `--settings` na frente dos args (com `enablePositionalOptions` a opção da raiz não vale para um subcomando); recusa `args` que tragam `--settings` ou `--settings=` ANTES do primeiro `--` solto (exit 3; `--settings-file` e textos depois do `--` interno não são recusados). Resíduo documentado: um flag com valor no FIM dos args (`--model` sem valor) engole o `--settings`.
   - `preflight(paths, mux)`: `checkSettingsTarget(muxLink)` não ok → `SbError` exit 1 com o problema e "rode `sb doctor --fix`".
   - Os comandos fazem `spawnSync(claudeBin, argv, { stdio: 'inherit', env: cleanEnv(process.env) })` e saem com o mesmo código.
 
