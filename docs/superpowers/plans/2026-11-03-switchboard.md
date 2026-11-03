@@ -796,6 +796,7 @@ test('mux inexistente → exit 3', ...)
 - Modify: `src/cli.ts`, `src/report.ts` (`renderSwap`), `test/hygiene.test.ts` (`['swap','bk','admin1','--json']`)
 
 **Interfaces:**
+- Notas do review da Task 14: `writeJobFlags` NÃO tem guarda de sessão viva (o chamador garante) — antes de reescrever flags, o chamador confirma com `listAgents` que a entrada NÃO tem `pid` (logo após `stopSession`; `stopSession` devolve `false` quando `claude stop` falha, inclusive em sessão já parada: checar o `pid` ANTES de chamá-la); `stopSession` bloqueia o laço de eventos (`Atomics.wait`, igual ao `ctx.run` síncrono): tratar a parada como passo bloqueante e não concorrer com handlers de SIGTERM que precisem disparar rápido; o backup usa `backupDir(stamp)` (não sobrescreve backups anteriores).
 - Consumes: `desiredAccount`, `availability` (10); `readUsage` (9); `pointMux`, `currentAccount`, `readRuntime`, `writeRuntime`, `withLock` (7); `loadSessions`, `activityOf`, `startedAt`, `callerJobId` (15); `stopSession` (14).
 - Produces:
   - `interface SwapOutcome { mux: string; from: string; to: string; stopped: string[]; waitingBusy: string[]; keptScheduled: string[]; failed: Array<{ id: string; error: string }> }`
@@ -836,6 +837,7 @@ test('swap para a conta atual → noop', ...)
 - Modify: `src/cli.ts`, `src/core/panel.ts` (`pins` a partir das sessões com `owner.kind == 'pin'`; linha `sessões fixas: 95b0deff → admin1`), `test/hygiene.test.ts`
 
 **Interfaces:**
+- Notas do review da Task 14: `writeJobFlags` NÃO tem guarda de sessão viva (o chamador garante) — antes de reescrever flags, o chamador confirma com `listAgents` que a entrada NÃO tem `pid` (logo após `stopSession`; `stopSession` devolve `false` quando `claude stop` falha, inclusive em sessão já parada: checar o `pid` ANTES de chamá-la); `stopSession` bloqueia o laço de eventos (`Atomics.wait`, igual ao `ctx.run` síncrono): tratar a parada como passo bloqueante e não concorrer com handlers de SIGTERM que precisem disparar rápido; o backup usa `backupDir(stamp)` (não sobrescreve backups anteriores).
 - Consumes: `ensurePin`, `muxLink`, `readRuntime`, `writeRuntime`, `withLock` (7); `loadSessions`, `activityOf`, `callerJobId` (15); `stopSession`, `writeJobFlags`, `replaceSettings` (14); `resolveMuxForDir` (12).
 - Produces:
   - `findSession(sessions, prefix): Session` (nenhuma/ambígua → exit 3 listando os ids).
