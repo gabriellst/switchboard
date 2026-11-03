@@ -20,6 +20,7 @@ const main = defineCommand({
     which: () => import('./commands/which.js').then((m) => m.default),
     agents: () => import('./commands/agents.js').then((m) => m.default),
     run: () => import('./commands/run.js').then((m) => m.default),
+    swap: () => import('./commands/swap.js').then((m) => m.default),
   },
 })
 
