@@ -12,7 +12,7 @@ import { type JobState, type Ownership, ownershipOf, readJobState } from './jobs
 
 export interface Session {
   agent: AgentEntry
-  /** `null` se o `state.json` não existe ou não pôde ser lido (então só os campos do `agent` decidem a atividade) */
+  /** `null` se o `state.json` não existe ou não pôde ser lido. Numa sessão VIVA isso conta como `busy` (nunca parar o que não dá para ler). */
   job: JobState | null
   owner: Ownership
   /** tem `pid` (host aberto). Sem `pid`, o que o `state.json` diz sobre `inFlight`/limite é obsoleto. */
@@ -37,7 +37,7 @@ export function loadSessionsWithWarnings(ctx: Ctx): { sessions: Session[]; warni
       job = readJobState(ctx.paths, agent.id)
     } catch (e) {
       if (!(e instanceof SbError)) throw e
-      warnings.push(`sessão ${agent.id}: ${e.message}; tratada como sem state.json`)
+      warnings.push(`sessão ${agent.id}: ${e.message}; sem state.json legível (viva conta como ocupada)`)
     }
     sessions.push({ agent, job, owner: ownershipOf(job?.respawnFlags ?? [], ctx.paths), live: agent.pid != null })
   }
@@ -70,7 +70,7 @@ export function loadSessions(ctx: Ctx): Session[] {
 export function hasScheduledWork(job: JobState | null, agent: AgentEntry): boolean {
   if (agent.pid == null || job?.inFlight == null) return false
   const f = job.inFlight
-  return f.kinds.includes('session_cron') || f.kinds.includes('monitor') || f.wake != null
+  return f.kinds?.includes('session_cron') === true || f.kinds?.includes('monitor') === true || f.wake != null
 }
 
 /**
@@ -84,12 +84,14 @@ export function isLimitBlocked(s: Session): boolean {
 
 /**
  * Precedência: sem pid → `stopped` (o estado do job é obsoleto); a sessão que chamou → `busy` (nunca parar quem
- * chamou); trabalho agendado → `scheduled`; limite → `limit-blocked`; `status busy`/`tasks`/`queued` → `busy`; senão `free`.
- * `job` nulo: só os campos do `agent` decidem.
+ * chamou); VIVA sem job legível (`job == null`: state.json ausente, malformado ou de formato novo) → `busy` (pode ter
+ * cron/monitor/wake que não conseguimos ver: nunca parar o que não dá para ler); trabalho agendado → `scheduled`;
+ * limite → `limit-blocked`; `status busy`/`tasks`/`queued` → `busy`; senão `free`.
  */
 export function activityOf(s: Session, callerJobId?: string): Activity {
   if (!s.live) return 'stopped'
   if (callerJobId !== undefined && s.agent.id === callerJobId) return 'busy'
+  if (s.job === null) return 'busy'
   if (hasScheduledWork(s.job, s.agent)) return 'scheduled'
   if (isLimitBlocked(s)) return 'limit-blocked'
   const f = s.job?.inFlight

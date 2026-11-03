@@ -25,7 +25,27 @@ function readmeActivities(): Map<string, Activity> {
   }
   return out
 }
-const EXPECTED = readmeActivities()
+const README_ACTIVITIES = readmeActivities()
+
+/** Oráculo escrito à mão a partir das regras (NÃO do README): fixture → Activity esperada. */
+const EXPECTED: Record<string, Activity> = {
+  a1b2c3d4: 'busy', // working/busy, tasks 1, kinds local_agent: trabalho dentro do turno
+  b2c3d4e5: 'free', // done/idle, inFlight vazio
+  c3d4e5f6: 'stopped', // sem pid
+  d4e5f6a7: 'stopped', // limite, mas sem pid: estado obsoleto
+  e5f6a7b8: 'limit-blocked', // viva, ociosa, tasks 0, queued 1
+  f6a7b8c9: 'busy', // limite, mas tasks 4
+  '11aa22bb': 'scheduled', // session_cron
+  '22bb33cc': 'scheduled', // session_cron + wake
+  '33cc44dd': 'scheduled', // monitor (antes de busy)
+  '44dd55ee': 'scheduled', // cron one-shot ainda visível
+  '55ee66ff': 'free', // settings de terceiros, ociosa
+  '66ff7788': 'free', // sem --settings, ociosa
+  '77889900': 'free', // legado, ociosa
+  '88990011': 'free', // pin, ociosa
+  '99001122': 'scheduled', // running, inFlight sem drainableMonitors, session_cron
+  aa001122: 'stopped', // state.json obsoleto com cron, sem pid
+}
 
 /** Contexto com o `claude` falso devolvendo o agents.json das fixtures e os state.json das fixtures; HOME no sandbox. */
 function fixtureCtx(sb: Sandbox, over: { now?: () => number } = {}) {
@@ -58,16 +78,18 @@ const inFlight = (over: Partial<NonNullable<JobState['inFlight']>> = {}): NonNul
 const noPid = { pid: undefined, status: undefined } as const
 
 describe('fixtures de test/fixtures/claude: Activity do README', () => {
-  test('o README tem uma linha para cada state.json de fixture (e só elas)', () => {
-    expect([...EXPECTED.keys()].sort()).toEqual(JOB_IDS)
+  test('o mapa literal e o README têm uma entrada para cada state.json de fixture (e só elas)', () => {
+    expect(Object.keys(EXPECTED).sort()).toEqual(JOB_IDS)
+    expect([...README_ACTIVITIES.keys()].sort()).toEqual(JOB_IDS)
   })
 
-  test.each(JOB_IDS)('fixture %s → a Activity do README', (id) => {
+  test.each(JOB_IDS)('fixture %s → a Activity esperada (mapa literal e README coincidem)', (id) => {
     const sb = sandbox()
     const s = loadSessions(fixtureCtx(sb)).find((x) => x.agent.id === id)
     expect(s).toBeDefined()
-    expect(s!.job).not.toBeNull()
-    expect(activityOf(s!)).toBe(EXPECTED.get(id)!)
+    expect(s!.job).not.toBeNull() // toda fixture tem state.json: nenhuma cai na regra "viva sem job → busy"
+    expect(activityOf(s!)).toBe(EXPECTED[id]!)
+    expect(README_ACTIVITIES.get(id)).toBe(EXPECTED[id]!) // README editado e divergente falha aqui
   })
 
   test('pertença: mux, pin, legacy, foreign, none (pelo --settings das fixtures)', () => {
@@ -127,6 +149,12 @@ describe('hasScheduledWork', () => {
     ['selfWake sozinho não conta', inFlight({ selfWake: true })],
   ])('%s → false', (_n, f) => {
     expect(hasScheduledWork(jobWith({ inFlight: f }), live)).toBe(false)
+  })
+
+  test('JobState montado à mão sem `kinds` não lança (TypeError) e não é agendado', () => {
+    const job = { respawnFlags: [], inFlight: { tasks: 1, queued: 0 } } as unknown as JobState
+    expect(hasScheduledWork(job, live)).toBe(false)
+    expect(hasScheduledWork({ ...job, inFlight: { tasks: 1, queued: 0, wake: { at: 1 } } } as unknown as JobState, live)).toBe(true)
   })
 
   test('sem pid, sem inFlight ou sem job → false (state.json obsoleto não conta)', () => {
@@ -204,10 +232,15 @@ describe('activityOf (precedência)', () => {
     expect(activityOf(session({}, jobWith({ inFlight: inFlight() })))).toBe('free')
   })
 
-  test('job null (state.json ausente): só os campos do agent decidem', () => {
-    expect(activityOf(session({}, null))).toBe('free')
+  test('viva sem job (state.json ausente ou ilegível) → busy: nunca parar o que não dá para ler', () => {
+    expect(activityOf(session({ status: 'idle' }, null))).toBe('busy')
     expect(activityOf(session({ status: 'busy' }, null))).toBe('busy')
-    expect(activityOf(session({}, null), 'a1b2c3d4')).toBe('busy')
+    expect(activityOf(session({}, null), 'a1b2c3d4')).toBe('busy') // quem chamou
+    expect(activityOf(session({ status: undefined }, null))).toBe('busy')
+  })
+
+  test('parada sem job → stopped', () => {
+    expect(activityOf(session(noPid, null))).toBe('stopped')
   })
 
   test('parser tolerante: job.state qualquer, sem inFlight/needs/wake/fan', () => {
@@ -239,7 +272,7 @@ describe('startedAt', () => {
 })
 
 describe('loadSessions', () => {
-  test('sem state.json → job null (e a atividade vem só do agent)', () => {
+  test('sem state.json → job null (viva → busy, parada → stopped)', () => {
     const sb = sandbox()
     sb.addJob({ agent: { id: 'a1b2c3d4', pid: 9, status: 'busy' } })
     sb.addJob({ agent: { id: 'b2c3d4e5' } })
@@ -250,6 +283,23 @@ describe('loadSessions', () => {
     ])
     expect(activityOf(list[0]!)).toBe('busy')
     expect(activityOf(list[1]!)).toBe('stopped')
+  })
+
+  test.each([
+    ['respawnFlags não é lista', `{"respawnFlags": "x"}`],
+    ['inFlight sem kinds (formato futuro)', `{"respawnFlags": [], "state": "done", "inFlight": {"tasks": 1, "queued": 0}}`],
+    ['JSON inválido', '{"respawnFlags": ['],
+  ])('sessão VIVA e ociosa com state.json malformado (%s) → busy, e o aviso vai para o log sem conteúdo', (_n, text) => {
+    const sb = sandbox()
+    sb.addJob({ agent: { id: 'b2c3d4e5', pid: 10, status: 'idle' } })
+    mkdirSync(join(sb.paths.jobsDir, 'b2c3d4e5'), { recursive: true })
+    writeFileSync(join(sb.paths.jobsDir, 'b2c3d4e5', 'state.json'), text.replace('"x"', `"${FAKE_TOKEN}"`))
+    const list = loadSessions(sb.ctx())
+    expect(list[0]!.job).toBeNull()
+    expect(activityOf(list[0]!)).toBe('busy') // pode ter cron/monitor/wake que não conseguimos ver
+    const log = readFileSync(logFile(sb.paths, 'watch'), 'utf8')
+    expect(log).toContain('b2c3d4e5')
+    expect(log).not.toContain('sk-ant-')
   })
 
   test('state.json malformado não derruba a listagem: job null + aviso sem conteúdo (também no log)', () => {
