@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { addMux, resolveMuxForDir, rmMux, setMux } from '../src/core/mux.js'
 import { loadConfig } from '../src/core/config.js'
@@ -18,6 +18,16 @@ function setup(config: unknown, tokens: string[] = ['gabriel', 'admin1']): Sandb
 }
 
 const registry = { switchboard: 1, accounts: { gabriel: {}, admin1: {} }, mux: {} }
+
+const run = async (p: Promise<unknown>): Promise<SbError | undefined> => {
+  try {
+    await p
+  } catch (e) {
+    if (e instanceof SbError) return e
+    throw e
+  }
+  return undefined
+}
 
 const exitOf = async (p: Promise<unknown>): Promise<number | undefined> => {
   try {
@@ -90,6 +100,41 @@ describe('addMux', () => {
     expect(await exitOf(addMux(sb.ctx(), 'bk', { root: '~/bk', account: 'gabriel', accounts: ['gabriel'], pool: ['admin1'] }))).toBe(EXIT.INVALID_CONFIG)
     expect(readFileSync(sb.paths.configFile, 'utf8')).toBe(before)
     expect(exists(muxLink(sb.paths, 'bk'))).toBe(false)
+  })
+
+  test('add com conta que tem token mas não está no registro → exit 3 "não registrada"; sem config prévia, nenhum arquivo fica para trás', async () => {
+    const sb = setup(registry)
+    sb.addToken('orfa')
+    const before = readFileSync(sb.paths.configFile, 'utf8')
+    const e = await run(addMux(sb.ctx(), 'bk', { root: '~/bk', account: 'orfa' }))
+    expect(e?.exit).toBe(EXIT.USAGE)
+    expect(e?.message).toContain('não está registrada')
+    expect(readFileSync(sb.paths.configFile, 'utf8')).toBe(before)
+
+    const bare = sandbox() // sem config
+    bare.addToken('orfa')
+    expect((await run(addMux(bare.ctx(), 'bk', { root: '~/bk', account: 'orfa' })))?.exit).toBe(EXIT.USAGE)
+    expect(exists(bare.paths.configFile)).toBe(false)
+    // edição que falha depois do ensureConfig (keychain + pool inválido) também desfaz o arquivo criado
+    expect(await exitOf(addMux(bare.ctx(), 'bk', { root: '~/bk', account: 'keychain', pool: ['keychain'] }))).toBe(EXIT.INVALID_CONFIG)
+    expect(exists(bare.paths.configFile)).toBe(false)
+    expect(exists(muxLink(bare.paths, 'bk'))).toBe(false)
+  })
+
+  test('add/set: root que não é absoluto nem começa por ~ → exit 3, nada gravado', async () => {
+    const sb = setup(registry)
+    for (const root of ['bk', './bk', '../bk', '~bk', '']) {
+      const e = await run(addMux(sb.ctx(), 'bk', { root, account: 'gabriel' }))
+      expect(e?.exit).toBe(EXIT.USAGE)
+      expect(e?.message).toContain('use um caminho absoluto ou começando por ~')
+    }
+    expect(Object.keys((await loadConfig(sb.paths)).mux)).toEqual([])
+    await addMux(sb.ctx(), 'bk', { root: '~/bk', account: 'gabriel' })
+    const before = readFileSync(sb.paths.configFile, 'utf8')
+    expect((await run(setMux(sb.ctx(), 'bk', { root: 'relativo' })))?.exit).toBe(EXIT.USAGE)
+    expect(readFileSync(sb.paths.configFile, 'utf8')).toBe(before)
+    await addMux(sb.ctx(), 'abs', { root: '/tmp/abs', account: 'gabriel' }) // absoluto e `~` puro valem
+    expect((await setMux(sb.ctx(), 'abs', { root: '~' })).changed).toEqual(['root'])
   })
 
   test('add: nome inválido (../x), mux repetido e root repetido não gravam nada', async () => {
@@ -208,6 +253,20 @@ describe('resolveMuxForDir', () => {
     expect(resolveMuxForDir(cfg, join(home, 'real', 'ainda', 'nao', 'existe'), home)).toBe('bk')
   })
 
+  test('HOME e pasta alcançados por um alias que não é o realpath (/var → /private/var)', () => {
+    const sb = sandbox()
+    const alias = `${sb.dir}-alias`
+    symlinkSync(sb.dir, alias)
+    const home = join(alias, 'home') // HOME "do ambiente" passando pelo alias
+    mkdirSync(join(sb.env.HOME!, 'p', 'x'), { recursive: true })
+    const cfg = cfgOf(sb, { bk: '~/p', fora: '~/o' }, 'fora')
+    expect(resolveMuxForDir(cfg, join(alias, 'home', 'p', 'x'), home)).toBe('bk') // pasta pelo alias, root pelo alias
+    expect(resolveMuxForDir(cfg, join(sb.env.HOME!, 'p', 'x'), home)).toBe('bk') // pasta pelo realpath, root pelo alias
+    const abs = cfgOf(sb, { bk: join(alias, 'home', 'p') }, 'bk') // root absoluto escrito pelo alias
+    expect(resolveMuxForDir(abs, join(sb.env.HOME!, 'p', 'x'), sb.env.HOME!)).toBe('bk')
+    rmSync(alias)
+  })
+
   test('sem default e fora de todos → exit 2', () => {
     const sb = sandbox()
     const home = sb.env.HOME!
@@ -244,6 +303,40 @@ describe('sb which', () => {
     expect(r.code).toBe(0)
     expect(JSON.parse(r.stdout)).toEqual({ mux: 'bk', settings: muxLink(sb.paths, 'bk'), account: 'gabriel' })
   })
+
+  test('happy path em texto e --json: stdout exato', async () => {
+    const sb = setup(registry)
+    await addMux(sb.ctx(), 'bk', { root: '~/bk', account: 'gabriel' })
+    const t = sb.runSb(['which'], { cwd: sb.dir })
+    expect(t.code).toBe(0)
+    expect(t.stdout).toBe(`${muxLink(sb.paths, 'bk')}\n`)
+    const j = sb.runSb(['which', '--json'], { cwd: sb.dir })
+    expect(j.code).toBe(0)
+    expect(j.stdout).toBe(`${JSON.stringify({ mux: 'bk', settings: muxLink(sb.paths, 'bk'), account: 'gabriel' })}\n`)
+  })
+
+  // fail closed: um settings inválido faria o claude cair em silêncio no keychain (F6), então o wrapper tem de receber erro
+  const BREAKS: Array<[string, (sb: Sandbox) => void, RegExp]> = [
+    ['link ausente', (sb) => rmSync(muxLink(sb.paths, 'bk')), /link.*(ausente|não existe)/i],
+    ['link quebrado (token sumiu)', (sb) => rmSync(tokenFile(sb.paths, 'gabriel')), /quebrado|aponta/i],
+    ['token com JSON inválido', (sb) => writeFileSync(tokenFile(sb.paths, 'gabriel'), 'not json{'), /JSON inválido/i],
+    ['token sem CLAUDE_CODE_OAUTH_TOKEN', (sb) => writeFileSync(tokenFile(sb.paths, 'gabriel'), '{"env":{}}'), /CLAUDE_CODE_OAUTH_TOKEN/],
+  ]
+  for (const [name, breakIt, msg] of BREAKS) {
+    for (const flags of [[], ['--json']]) {
+      test(`${name} (${flags.join('') || 'texto'}) → exit 1, stdout vazio, dica do doctor`, async () => {
+        const sb = setup(registry)
+        await addMux(sb.ctx(), 'bk', { root: '~/bk', account: 'gabriel' })
+        breakIt(sb)
+        const r = sb.runSb(['which', ...flags], { cwd: sb.dir })
+        expect(r.code).toBe(EXIT.CHECK_FAILED)
+        expect(r.stdout).toBe('')
+        expect(r.stderr).toMatch(msg)
+        expect(r.stderr).toContain('sb doctor --fix')
+        expect(r.stderr).not.toMatch(/sk-ant-/)
+      })
+    }
+  }
 
   test('erro: stdout vazio, mensagem em stderr, exit ≠ 0', () => {
     const sb = sandbox() // sem config

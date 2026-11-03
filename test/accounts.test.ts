@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { attachAccount, detachAccount, removeAccount } from '../src/core/accounts.js'
 import { loadConfig } from '../src/core/config.js'
@@ -193,6 +193,32 @@ describe('removeAccount', () => {
     expect((await run(removeAccount(sb.ctx(), 'keychain', { yes: true })))?.exit).toBe(EXIT.USAGE)
     expect((await run(removeAccount(sb.ctx(), '../x', { yes: true })))?.exit).toBe(EXIT.USAGE)
   })
+})
+
+test('removeAccount mantém o token se a edição da config falha', async () => {
+  const sb = setup()
+  const before = readFileSync(sb.paths.configFile, 'utf8')
+  const dir = dirname(sb.paths.configFile)
+  chmodSync(dir, 0o500) // sem escrita: o temporário do writeAtomic não nasce, a edição lança
+  try {
+    await expect(removeAccount(sb.ctx(), 'solta', { yes: true })).rejects.toThrow()
+  } finally {
+    chmodSync(dir, 0o700)
+  }
+  expect(readFileSync(sb.paths.configFile, 'utf8')).toBe(before)
+  expect(existsSync(tokenFile(sb.paths, 'solta'))).toBe(true)
+})
+
+test('dois `sb attach` simultâneos (contas diferentes, mesmo mux): os dois entram', async () => {
+  const sb = setup()
+  const [a, b] = await Promise.all([
+    sb.runSbAsync(['attach', 'admin1', 'bk', '--pool']),
+    sb.runSbAsync(['attach', 'solta', 'bk', '--pool']),
+  ])
+  expect([a.code, b.code]).toEqual([0, 0])
+  const m = (await loadConfig(sb.paths)).mux.bk!
+  expect([...m.accounts].sort()).toEqual(['admin1', 'gabriel', 'solta'])
+  expect([...m.pool].sort()).toEqual(['admin1', 'gabriel', 'solta'])
 })
 
 test('uma conta registrada sem mux é válida na config (accounts sem nenhum mux que a cite)', async () => {

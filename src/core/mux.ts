@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, realpathSync, rmSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { editConfig, loadConfig, type Config, type ConfigEdit } from './config.js'
 import type { Ctx } from './ctx.js'
@@ -11,6 +11,11 @@ import { ensureConfig } from './config.js'
 import { ensureState, hasToken } from './tokens.js'
 
 const usage = (message: string, detail?: string): SbError => new SbError(message, EXIT.USAGE, detail)
+
+/** Root relativo seria resolvido contra a pasta de quem rodou o comando: só vale absoluto ou `~`. */
+function assertRoot(root: string): void {
+  if (!/^(\/|~$|~\/)/.test(root)) throw usage(`root inválido: ${JSON.stringify(root)} — use um caminho absoluto ou começando por ~`)
+}
 
 /** realpath que aceita caminho inexistente: resolve o ancestral mais próximo que existe e reanexa o resto. */
 function realpathLoose(path: string): string {
@@ -77,15 +82,17 @@ export async function addMux(ctx: Ctx, name: string, o: AddMuxOpts): Promise<{ m
   assertSafeName(name)
   assertSafeName(o.account)
   for (const a of [...(o.accounts ?? []), ...(o.pool ?? [])]) assertSafeName(a)
-  if (!o.root) throw usage('--root não pode ser vazio')
+  assertRoot(o.root)
 
   return withLock(ctx.paths, async () => {
     const hasConfig = existsSync(ctx.paths.configFile)
     const cfg = hasConfig ? await loadConfig(ctx.paths) : undefined
     if (cfg && name in cfg.mux) throw usage(`o mux "${name}" já existe`, `  mude-o com \`sb mux set ${name} …\``)
-    if (o.account !== KEYCHAIN && !hasToken(ctx.paths, o.account)) {
-      throw usage(`a conta preferida "${o.account}" não tem token: rode \`sb login ${o.account}\``)
+    if (o.account !== KEYCHAIN) {
+      if (!cfg || !(o.account in cfg.accounts)) throw usage(`a conta "${o.account}" não está registrada: rode \`sb login ${o.account}\``)
+      if (!hasToken(ctx.paths, o.account)) throw usage(`a conta preferida "${o.account}" não tem token: rode \`sb login ${o.account}\``)
     }
+    // só cria a config mínima depois das recusas; se a edição falhar, não deixa o arquivo recém-criado para trás
     if (!hasConfig) await ensureConfig(ctx.paths)
 
     const madeDefault = cfg?.default === undefined
@@ -93,7 +100,12 @@ export async function addMux(ctx: Ctx, name: string, o: AddMuxOpts): Promise<{ m
       { path: ['mux', name], value: { root: o.root, account: o.account, accounts: o.accounts ?? [o.account], pool: o.pool ?? [] } },
     ]
     if (madeDefault) edits.push({ path: ['default'], value: name })
-    await editConfig(ctx.paths, edits)
+    try {
+      await editConfig(ctx.paths, edits)
+    } catch (e) {
+      if (!hasConfig) rmSync(ctx.paths.configFile, { force: true })
+      throw e
+    }
 
     ensureState(ctx.paths)
     pointMux(ctx.paths, name, o.account)
@@ -117,7 +129,7 @@ export interface SetMuxOpts {
 export async function setMux(ctx: Ctx, name: string, p: SetMuxOpts): Promise<{ changed: string[] }> {
   assertSafeName(name)
   for (const a of [p.account, ...(p.accounts ?? []), ...(p.pool ?? [])]) if (a !== undefined) assertSafeName(a)
-  if (p.root === '') throw usage('--root não pode ser vazio')
+  if (p.root !== undefined) assertRoot(p.root)
 
   return withLock(ctx.paths, async () => {
     const cfg = await loadConfig(ctx.paths)

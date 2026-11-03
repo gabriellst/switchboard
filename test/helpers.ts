@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathS
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { defaultCtx, makeLog, type Ctx } from '../src/core/ctx.js'
+import { pointMux } from '../src/core/links.js'
 import { resolvePaths, tokenFile, usageFile, type Paths } from '../src/core/paths.js'
 
 export const FAKE_TOKEN = 'sk-ant-oat01-' + 'x'.repeat(40)
@@ -134,6 +135,7 @@ export function populatedSandbox(): Sandbox {
     writeFileSync(tokenFile(p, a), JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: FAKE_TOKEN } }), { mode: 0o600 })
     chmodSync(tokenFile(p, a), 0o600)
   }
+  pointMux(p, 'bk', 'gabriel') // o link do mux: sem ele o `sb which` falha fechado
   // formato real do usage.json (`UsageFile`: latest/previous/groups); medida antiga o bastante para a sonda refazer
   const measured = (five: number, seven: number): Record<string, unknown> => ({
     ok: true,
@@ -152,12 +154,13 @@ export function populatedSandbox(): Sandbox {
   return sb
 }
 
-/** Todos os arquivos (recursivo) sob `dir`, caminhos absolutos. */
+/** Todos os arquivos (recursivo) sob `dir`, caminhos absolutos. Symlinks ficam de fora (`mux/*.json` aponta para tokens/; o alvo já é contado lá). */
 export function filesUnder(dir: string): string[] {
   const out: string[] = []
   const walk = (d: string): void => {
     for (const e of readdirSync(d, { withFileTypes: true })) {
       const f = join(d, e.name)
+      if (e.isSymbolicLink()) continue
       if (e.isDirectory()) walk(f)
       else out.push(f)
     }
