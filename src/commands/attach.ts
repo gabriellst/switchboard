@@ -2,21 +2,15 @@ import { defineCommand } from 'citty'
 import { attachAccount } from '../core/accounts.js'
 import { defaultCtx } from '../core/ctx.js'
 import { EXIT, SbError } from '../core/errors.js'
+import { needsLogin } from '../core/login.js'
+import { parsePool } from './args.js'
 import { guarded } from './guard.js'
-
-/** `--at N` (posição 1-based, implica `--pool`) ou `--pool` (fim da fila). */
-export function parsePool(pool: boolean, at: string | undefined): boolean | number | undefined {
-  if (at !== undefined) {
-    if (!/^[1-9]\d*$/.test(at)) throw new SbError(`--at inválido: "${at}" (use um inteiro a partir de 1)`, EXIT.USAGE)
-    return Number(at)
-  }
-  return pool ? true : undefined
-}
+import { runLogin } from './login.js'
 
 export default defineCommand({
   meta: { name: 'attach', description: 'Anexa uma conta a um mux (accounts; com --pool entra na fila; --preferred a faz preferida)' },
   args: {
-    account: { type: 'positional', required: true, description: 'Conta registrada (sb login)' },
+    account: { type: 'positional', required: true, description: 'Conta (se ainda não existe, faz o login antes, como sb login --attach)' },
     mux: { type: 'positional', required: true, description: 'Mux' },
     pool: { type: 'boolean', description: 'Põe a conta no pool (fim da fila)' },
     at: { type: 'string', description: 'Posição (1-based) no pool; implica --pool' },
@@ -25,11 +19,17 @@ export default defineCommand({
   },
   run: guarded(async ({ args }) => {
     const pool = parsePool(args.pool === true, args.at)
-    const { changed } = await attachAccount(defaultCtx(), args.account, {
-      mux: args.mux,
-      ...(pool !== undefined && { pool }),
-      ...(args.preferred === true && { preferred: true }),
-    })
+    const spec = { mux: args.mux, ...(pool !== undefined && { pool }), ...(args.preferred === true && { preferred: true }) }
+    const ctx = defaultCtx()
+    // conta que ainda não existe (sem registro ou sem token): faz o login com as mesmas regras e anexa (igual a `login --attach`)
+    if (await needsLogin(ctx, args.account)) {
+      if (args.json === true) {
+        throw new SbError(`a conta "${args.account}" ainda não tem login: rode sem --json (o login em segundo plano não tem saída JSON)`, EXIT.USAGE)
+      }
+      await runLogin(ctx, { account: args.account, terminal: false, foreground: false, attach: spec })
+      return
+    }
+    const { changed } = await attachAccount(ctx, args.account, spec)
     if (args.json === true) {
       process.stdout.write(`${JSON.stringify({ account: args.account, mux: args.mux, changed })}\n`)
       return

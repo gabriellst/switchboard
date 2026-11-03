@@ -14,6 +14,7 @@ const main = defineCommand({
     usage: () => import('./commands/usage.js').then((m) => m.default),
     accounts: () => import('./commands/accounts.js').then((m) => m.default),
     mux: () => import('./commands/mux.js').then((m) => m.default),
+    login: () => import('./commands/login.js').then((m) => m.default),
     attach: () => import('./commands/attach.js').then((m) => m.default),
     detach: () => import('./commands/detach.js').then((m) => m.default),
     which: () => import('./commands/which.js').then((m) => m.default),

@@ -19,11 +19,22 @@ export type Change = 'accounts' | 'pool' | 'preferred'
 
 const usage = (message: string, detail?: string): SbError => new SbError(message, EXIT.USAGE, detail)
 
-function requireMux(cfg: Config, mux: string): MuxConfig {
+export function requireMux(cfg: Config, mux: string): MuxConfig {
   const m = cfg.mux[mux]
   if (m) return m
   const known = Object.keys(cfg.mux)
   throw usage(`mux inexistente: "${mux}"`, `  ${known.length ? `muxes: ${known.join(', ')}` : 'nenhum mux definido; crie um com `sb mux add`'}`)
+}
+
+/** Recusas que não dependem da config (nomes, posição do pool, keychain no pool): exit 3. Também vale antes de um login. */
+export function checkAttachSpec(account: string, spec: AttachSpec): void {
+  assertSafeName(account)
+  assertSafeName(spec.mux)
+  const { pool } = spec
+  if (typeof pool === 'number' && (!Number.isInteger(pool) || pool < 1)) throw usage(`posição inválida no pool: ${pool} (use um inteiro a partir de 1)`)
+  if (account === KEYCHAIN && pool !== undefined && pool !== false) {
+    throw usage('"keychain" não pode entrar no pool: ele nunca troca sozinho', '  anexe sem --pool / --at')
+  }
 }
 
 /**
@@ -32,13 +43,8 @@ function requireMux(cfg: Config, mux: string): MuxConfig {
  * Toda a edição é um único `editConfig` sob o lock (tudo-ou-nada; as invariantes da config valem).
  */
 export async function attachAccount(ctx: Ctx, account: string, spec: AttachSpec): Promise<{ changed: Change[] }> {
-  assertSafeName(account)
-  assertSafeName(spec.mux)
+  checkAttachSpec(account, spec)
   const { pool } = spec
-  if (typeof pool === 'number' && (!Number.isInteger(pool) || pool < 1)) throw usage(`posição inválida no pool: ${pool} (use um inteiro a partir de 1)`)
-  if (account === KEYCHAIN && pool !== undefined && pool !== false) {
-    throw usage('"keychain" não pode entrar no pool: ele nunca troca sozinho', '  anexe sem --pool / --at')
-  }
 
   return withLock(ctx.paths, async () => {
     const cfg = await loadConfig(ctx.paths)

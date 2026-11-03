@@ -12,6 +12,13 @@ export interface FakeCall {
   argv: string[]
   cwd: string
   hasOauthEnv: boolean
+  /** `CLAUDE_CONFIG_DIR` que o claude falso recebeu (null se ausente) */
+  configDir?: string | null
+  /** conteúdo do `.claude.json` desse diretório na hora da chamada */
+  onboarding?: unknown
+  term?: string | null
+  cols?: number | null
+  pid?: number
 }
 
 export interface Sandbox {

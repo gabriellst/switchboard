@@ -14,6 +14,8 @@ const CASES: Array<[string[], number]> = [
   [['attach', 'admin1', 'bk', '--pool'], 0], // admin1 já está no pool do bk: idempotente
   [['detach', 'admin1', 'bk'], 0],
   [['accounts', 'rm', 'admin1'], 3], // sem --yes: recusa
+  [['login', 'x', '--terminal'], 3], // entrada vazia: cancela, nada gravado
+  [['attach', 'nova', 'bk'], 1], // conta inexistente: login desanexado com o claude falso (sem token impresso) → falha, sem vazar
 ]
 
 test.each(CASES)('sem token na saída: sb %p', (args, code) => {
