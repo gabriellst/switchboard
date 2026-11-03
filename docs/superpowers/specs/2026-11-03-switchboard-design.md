@@ -138,7 +138,22 @@ desejada(mux) =
 - **Contas duplicadas** contam como uma só (para destino e para o total do pool).
 - Histerese para não oscilar: **[builder]** (ex.: só voltar quando o reset passou ou a utilização caiu
   X pontos abaixo do limite).
-- Mux com `swap: false` nunca troca (o berzerk).
+- Mux com `swap: false` nunca troca sozinho (o berzerk). Só `sb swap <mux> <conta>` manual, com a
+  conta escrita por extenso, muda um mux desses **[usuário: recomendado aceito]**.
+- **`sb swap` manual vale até o próximo reset da conta preferida** **[usuário]**: o `runtime.json`
+  guarda `{ mux, account, until: <epoch do próximo reset da preferida> }`; até lá o `watch` trata a
+  preferida como indisponível *para esse mux* (escolhe a conta manual se ela estiver disponível; se
+  ela esgotar, segue a fila normal). Passado o reset, o override expira e vale a regra de sempre.
+  `sb swap <mux> --clear` desfaz antes. O painel mostra o override e quando expira.
+- **Sessões com trabalho agendado não são paradas pela troca** **[usuário: "sim, usamos" loops,
+  despertares agendados e monitores]**. Nessas, o `watch` não chama `claude stop`; elas ficam na
+  conta antiga e passam para a nova na próxima vez que pararem por conta própria (ou quando o
+  usuário as reabrir). Se a conta antiga estiver **esgotada**, o `watch` notifica em vez de parar
+  ("sessão X tem trabalho agendado e ficou na conta esgotada Y") **[minha escolha]**. Detectar
+  "trabalho agendado" é um **spike obrigatório no início do plano**: `inFlight.kinds`,
+  `inFlight.drainableMonitors`, crons/`ScheduleWakeup` e `/loop` precisam ser observados numa
+  sessão de teste; até isso estar provado, a regra conservadora é: qualquer `inFlight` não vazio
+  OU sessão com `kinds`/monitores registrados = não parar.
 
 ### Aplicar uma troca
 
