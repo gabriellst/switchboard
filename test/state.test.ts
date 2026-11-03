@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { spawn, type ChildProcess } from 'node:child_process'
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { EXIT, SbError } from '../src/core/errors.js'
 import { symlinkAtomic, withLock, writeAtomic } from '../src/core/fsx.js'
@@ -196,6 +196,41 @@ describe('links', () => {
       pointMux(sb.paths, 'bk', 'keychain') // ensureState criou tokens/keychain.json = {}
       expect(checkSettingsTarget(link)).toEqual({ ok: true, account: 'keychain' })
     })
+    test('arquivo comum no lugar do link (editor que salva atomicamente) → broken, nunca ok', () => {
+      const { sb, link } = setup()
+      sb.addToken('gabriel')
+      writeFileSync(link, readFileSync(tokenFile(sb.paths, 'gabriel'), 'utf8'))
+      expect(checkSettingsTarget(link)).toEqual({ ok: false, problem: 'broken' })
+      rmSync(link)
+      writeFileSync(link, '{}')
+      expect(checkSettingsTarget(link)).toEqual({ ok: false, problem: 'broken' })
+    })
+    test('link que aponta para fora de tokens/ → fail closed', () => {
+      const { sb, link } = setup()
+      const out = join(sb.dir, 'elsewhere')
+      mkdirSync(out)
+      writeFileSync(join(out, 'keychain.json'), '{}')
+      symlinkSync(join(out, 'keychain.json'), link)
+      expect(checkSettingsTarget(link)).toEqual({ ok: false, problem: 'broken' })
+      rmSync(link)
+      writeFileSync(join(out, 'x.json'), JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: FAKE_TOKEN } }))
+      symlinkSync(join(out, 'x.json'), link)
+      expect(checkSettingsTarget(link)).toEqual({ ok: false, problem: 'broken' })
+    })
+    test('cadeia de dois saltos: vale a conta do alvo REAL, desde que esteja em tokens/', () => {
+      const { sb, link } = setup()
+      sb.addToken('admin1')
+      const out = join(sb.dir, 'elsewhere')
+      mkdirSync(out)
+      symlinkSync(tokenFile(sb.paths, 'admin1'), join(out, 'x.json'))
+      symlinkSync(join(out, 'x.json'), link)
+      expect(checkSettingsTarget(link)).toEqual({ ok: true, account: 'admin1' })
+    })
+    test('link para diretório → fail closed', () => {
+      const { sb, link } = setup()
+      symlinkSync(join(sb.paths.stateDir, 'tokens'), link)
+      expect(checkSettingsTarget(link).ok).toBe(false)
+    })
     test('keychain só vale se o alvo é exatamente {}', () => {
       const { sb, link } = setup()
       pointMux(sb.paths, 'bk', 'keychain')
@@ -280,6 +315,52 @@ describe('withLock', () => {
     expect(maxInside).toBe(1)
     expect(order.sort()).toEqual([1, 2, 3, 4])
     expect(readdirSync(sb.paths.stateDir)).toEqual([])
+  })
+
+  // Um laço síncrono não deixa timer de guarda disparar no mesmo processo: roda num filho com timeout.
+  const probeLock = (sb: ReturnType<typeof sandbox>): { exit: number | null; out: { exit?: number; ms?: number; ticks?: number; ran?: boolean; msg?: string } } => {
+    const script = `
+      const { withLock } = await import(${JSON.stringify(join(import.meta.dir, '..', 'src', 'core', 'fsx.ts'))})
+      let ticks = 0
+      const iv = setInterval(() => ticks++, 20)
+      const t0 = Date.now()
+      let ran = false
+      try { await withLock({ stateDir: ${JSON.stringify(sb.paths.stateDir)} }, async () => { ran = true }, { waitMs: 300 }) } catch (e) {
+        console.log(JSON.stringify({ exit: e.exit, ms: Date.now() - t0, ticks, ran, msg: e.message }))
+      }
+      clearInterval(iv)
+    `
+    const r = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', timeout: 5_000, killSignal: 'SIGKILL' })
+    return { exit: r.status, out: r.stdout.trim() ? JSON.parse(r.stdout.trim()) : {} }
+  }
+
+  test.each([
+    ['symlink dangling', (f: string) => symlinkSync('/nao/existe/aqui', f)],
+    ['diretório', (f: string) => mkdirSync(f)],
+    ['arquivo sem permissão (modo 000)', (f: string) => { writeFileSync(f, String(process.pid)); chmodSync(f, 0o000) }],
+  ])('lock ilegível (%s): respeita waitMs, sai com exit 5 e não trava o event loop', (_n, make) => {
+    const sb = sandbox()
+    ensureState(sb.paths)
+    make(lockFile(sb.paths))
+    const { exit, out } = probeLock(sb) // timeout do filho => exit null => falha, em vez de travar a suíte
+    expect(exit).toBe(0)
+    expect(out.exit).toBe(EXIT.LOCKED)
+    expect(out.ran).toBe(false)
+    expect(out.ms!).toBeGreaterThanOrEqual(250)
+    expect(out.ms!).toBeLessThan(2_000)
+    expect(out.ticks!).toBeGreaterThan(3) // o timer disparou enquanto esperava
+  })
+
+  test('mensagem de exit 5: milissegundos abaixo de 1s e dica de recuperação com o caminho do lock', async () => {
+    const sb = sandbox()
+    ensureState(sb.paths)
+    writeFileSync(lockFile(sb.paths), '')
+    const err = (await withLock(sb.paths, async () => 1, { waitMs: 200 }).catch((e: unknown) => e)) as SbError
+    expect(err.message).toContain('200ms')
+    expect(err.message).not.toContain('0s')
+    const text = `${err.message}\n${err.detail ?? ''}`
+    expect(text).toContain(lockFile(sb.paths))
+    expect(text).toMatch(/apague/)
   })
 
   test('não apaga o lock de outro dono ao terminar', async () => {

@@ -84,7 +84,7 @@ export function mkdirPrivate(dir: string): void {
 const GARBAGE_AFTER_MS = 5_000
 const POLL_MS = 50
 
-type LockState = { kind: 'live'; pid: number } | { kind: 'forming' } | { kind: 'stale' } | { kind: 'gone' }
+type LockState = { kind: 'live'; pid: number } | { kind: 'forming' } | { kind: 'stale' } | { kind: 'gone' } | { kind: 'unknown' }
 
 function isAlive(pid: number): boolean {
   try {
@@ -101,8 +101,9 @@ function inspect(file: string): LockState {
   try {
     text = readFileSync(file, 'utf8')
     ageMs = Date.now() - statSync(file).mtimeMs
-  } catch {
-    return { kind: 'gone' }
+  } catch (e) {
+    // só ENOENT é "sumiu"; qualquer outro erro (EACCES, EISDIR...) é lock que não dá para julgar: conta como preso
+    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'gone' } : { kind: 'unknown' }
   }
   const pid = /^\d+$/.test(text.trim()) ? Number(text.trim()) : 0
   if (pid > 0) return isAlive(pid) ? { kind: 'live', pid } : { kind: 'stale' }
@@ -165,16 +166,18 @@ export async function withLock<T>(paths: Paths, fn: () => Promise<T>, opts: { wa
   for (;;) {
     if (tryCreate(file)) break
     const state = inspect(file)
-    if (state.kind === 'stale') {
-      breakStale(file)
-      continue
-    }
-    if (state.kind === 'gone') continue
+    // prazo checado em TODA volta, seja qual for o estado: nenhum caminho pode girar sem fim
     if (Date.now() >= deadline) {
       const who = state.kind === 'live' ? ` (pid ${state.pid})` : ''
-      throw new SbError(`outro sb está rodando${who}; tentei por ${Math.round(waitMs / 1000)}s — tente de novo daqui a pouco`, EXIT.LOCKED)
+      const waited = waitMs < 1_000 ? `${waitMs}ms` : `${Math.round(waitMs / 1000)}s`
+      throw new SbError(
+        `outro sb está rodando${who}; tentei por ${waited}`,
+        EXIT.LOCKED,
+        `  tente de novo daqui a pouco; se não há outro sb rodando, apague ${file}`,
+      )
     }
-    await sleep(POLL_MS)
+    if (state.kind === 'stale') breakStale(file)
+    await sleep(state.kind === 'stale' || state.kind === 'gone' ? 1 : POLL_MS)
   }
   try {
     return await fn()

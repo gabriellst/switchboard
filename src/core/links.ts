@@ -1,5 +1,5 @@
-import { lstatSync, readFileSync, readlinkSync, statSync } from 'node:fs'
-import { basename } from 'node:path'
+import { lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import { symlinkAtomic } from './fsx.js'
 import { muxLink, pinLink, tokenFile, type Paths } from './paths.js'
 import { KEYCHAIN } from './tokens.js'
@@ -17,20 +17,28 @@ const accountOf = (target: string): string => basename(target).replace(/\.json$/
  * detectado aqui. `keychain` só é válido se o alvo é exatamente `{}`.
  */
 export function checkSettingsTarget(link: string): TargetCheck {
-  let isLink: boolean
   try {
-    isLink = lstatSync(link).isSymbolicLink()
+    // arquivo comum no lugar do link (editor que salva trocando o arquivo): o mux deixaria de seguir os swaps
+    if (!lstatSync(link).isSymbolicLink()) return { ok: false, problem: 'broken' }
   } catch {
     return { ok: false, problem: 'missing-link' }
   }
+  let real: string
   let text: string
   try {
-    statSync(link)
-    text = readFileSync(link, 'utf8')
+    real = realpathSync(link)
+    if (!statSync(real).isFile()) return { ok: false, problem: 'broken' }
+    text = readFileSync(real, 'utf8')
   } catch {
     return { ok: false, problem: 'broken' }
   }
-  const account = accountOf(isLink ? readlinkSync(link) : link)
+  // o alvo REAL tem que estar em <estado>/tokens (o link fica em <estado>/mux ou <estado>/pins); fora disso, falha fechada
+  try {
+    if (dirname(real) !== realpathSync(join(dirname(dirname(link)), 'tokens'))) return { ok: false, problem: 'broken' }
+  } catch {
+    return { ok: false, problem: 'broken' }
+  }
+  const account = accountOf(real)
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
