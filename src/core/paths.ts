@@ -52,3 +52,5 @@ export const runtimeFile = (p: Paths): string => join(p.stateDir, 'runtime.json'
 export const lockFile = (p: Paths): string => join(p.stateDir, 'lock')
 export const logFile = (p: Paths, which: 'watch' | 'login'): string => join(p.stateDir, 'log', `${which}.log`)
 export const backupDir = (p: Paths, stamp: string): string => join(p.stateDir, 'backup', stamp)
+/** pid do login em andamento (PTY): impede dois `setup-token` ao mesmo tempo. */
+export const loginLockFile = (p: Paths): string => join(p.stateDir, 'log', 'login.pid')

@@ -7,6 +7,10 @@
 //   setup-token.wait-enter — (opcional) `setup-token` só imprime depois de receber uma linha na entrada
 //   setup-token.sleep      — (opcional) milissegundos que `setup-token` dorme antes de sair (simula travar)
 //   setup-token.exit       — (opcional) código de saída de `setup-token`
+//   setup-token.chunks     — (opcional) JSON com uma lista de textos: cada um é uma escrita, com 300 ms entre elas
+//                            (no lugar de setup-token.txt; serve para cortar a URL entre duas escritas)
+//   setup-token.hang-ignore-hup — (opcional) ignora SIGHUP/SIGTERM, grava o próprio pid e o de um `sleep` filho
+//                            em pids.txt e fica preso (no máximo 40 s: nunca sobra processo para sempre)
 // `agents`/`stop` entram na Task 14.
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -50,6 +54,22 @@ if (argv[0] === 'setup-token') {
       process.stdin.once('data', () => resolve())
       process.stdin.resume()
     })
+  }
+  if (opt('setup-token.hang-ignore-hup') !== null) {
+    process.on('SIGHUP', () => undefined)
+    process.on('SIGTERM', () => undefined)
+    const child = Bun.spawn(['sleep', '40'], { stdio: ['ignore', 'ignore', 'ignore'] })
+    appendFileSync(join(dir, 'pids.txt'), `${process.pid}\n${child.pid}\n`)
+    await new Promise((r) => setTimeout(r, 40_000))
+    process.exit(0)
+  }
+  const chunks = opt('setup-token.chunks')
+  if (chunks !== null) {
+    const list = JSON.parse(chunks) as string[]
+    for (const [i, c] of list.entries()) {
+      if (i > 0) await new Promise((r) => setTimeout(r, 300))
+      process.stdout.write(c)
+    }
   }
   const text = opt('setup-token.txt')
   if (text !== null) process.stdout.write(text)

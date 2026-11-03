@@ -6,7 +6,7 @@ import type { AttachSpec } from '../core/accounts.js'
 import { cleanEnv } from '../core/claude.js'
 import { defaultCtx, type Ctx } from '../core/ctx.js'
 import { EXIT, SbError, type ExitCode } from '../core/errors.js'
-import { login, preflightLogin } from '../core/login.js'
+import { AttachAfterLoginError, login, preflightLogin } from '../core/login.js'
 import { logFile } from '../core/paths.js'
 import { parsePool } from './args.js'
 import { guarded } from './guard.js'
@@ -128,7 +128,7 @@ async function startDetached(ctx: Ctx, a: LoginArgs, io: LoginIO): Promise<void>
  */
 export async function runLogin(ctx: Ctx, a: LoginArgs, io: LoginIO = defaultIO()): Promise<void> {
   if (!a.terminal && !a.foreground && !io.isTTY) {
-    await preflightLogin(ctx, a.account, a.attach)
+    await preflightLogin(ctx, a.account, a.attach, { lock: true })
     return startDetached(ctx, a, io)
   }
   const detachedChild = a.foreground && !io.isTTY
@@ -151,8 +151,7 @@ export async function runLogin(ctx: Ctx, a: LoginArgs, io: LoginIO = defaultIO()
   } catch (e) {
     if (detachedChild) {
       // login feito e só o attach falhou: token e registro ficaram, então o conselho é `sb attach` (não colar token de novo)
-      const attachOnly = e instanceof SbError && e.detail?.includes('sb attach') === true
-      if (attachOnly) ctx.notify(`Switchboard: conta "${a.account}" salva, sem anexar`, `${e.message} ${e.detail?.trim() ?? ''}`)
+      if (e instanceof AttachAfterLoginError) ctx.notify(`Switchboard: conta "${a.account}" salva, sem anexar`, `${e.message} ${e.detail?.trim() ?? ''}`)
       else ctx.notify('Switchboard: login não concluído', `Rode no terminal: sb login ${a.account} --terminal`)
     }
     throw e

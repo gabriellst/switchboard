@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,8 +7,8 @@ import { claudeBin, cleanEnv } from './claude.js'
 import { editConfig, ensureConfig, loadConfig, type Config } from './config.js'
 import type { Ctx } from './ctx.js'
 import { EXIT, SbError } from './errors.js'
-import { withLock } from './fsx.js'
-import { assertSafeName, tokenFile } from './paths.js'
+import { acquirePidFile, peekPidFile, releasePidFile, withLock } from './fsx.js'
+import { assertSafeName, loginLockFile, logFile, tokenFile } from './paths.js'
 import { probeToken, type ProbeResult } from './probe.js'
 import { KEYCHAIN } from './schema.js'
 import { hasToken, saveToken } from './tokens.js'
@@ -20,6 +20,14 @@ import { hasToken, saveToken } from './tokens.js'
 const TOKEN_RE = /sk-ant-oat01-[A-Za-z0-9_-]{20,}/g
 const PASTED_RE = /^sk-ant-oat01-[A-Za-z0-9_-]{20,}$/
 const URL_RE = /https:\/\/\S+\/oauth\/authorize\?\S+/
+
+/** Login feito (token salvo, conta registrada) e só o attach falhou; o exit é o do attach (em geral 3; trava presa = 5). */
+export class AttachAfterLoginError extends SbError {
+  constructor(message: string, exit: SbError['exit'], detail: string) {
+    super(message, exit, detail)
+    this.name = 'AttachAfterLoginError'
+  }
+}
 
 const usage = (message: string, detail?: string): SbError => new SbError(message, EXIT.USAGE, detail)
 
@@ -71,13 +79,74 @@ const PTY_SCRIPT = 'stty cols 2000 rows 50; exec "$0" setup-token'
 // stdio 'pipe' do Node é um socket. `< <(cat)` dá ao `script` um pipe de verdade e ainda deixa escrever o Enter.
 // O `exec` põe o `script` no lugar do bash: a saída fecha quando ele acaba. No bash: $0 = PTY_SCRIPT, $1 = o claude;
 // o `script` roda exatamente `script -q /dev/null sh -c '<PTY_SCRIPT>' <claude>`.
-const PIPELINE = 'exec script -q /dev/null sh -c "$0" "$1" < <(cat)'
+const PIPELINE = 'exec /usr/bin/script -q /dev/null sh -c "$0" "$1" < <(cat)'
+
+/** Pids dos descendentes de `root` (uma varredura de `ps`; vazio se `ps` falhar). */
+function descendantsOf(root: number): number[] {
+  const r = spawnSync('/bin/ps', ['-axo', 'pid=,ppid='], { encoding: 'utf8' })
+  if (r.status !== 0) return []
+  const kids = new Map<number, number[]>()
+  for (const line of r.stdout.split('\n')) {
+    const [pid, ppid] = line.trim().split(/\s+/).map(Number)
+    if (!pid || !ppid) continue
+    kids.set(ppid, [...(kids.get(ppid) ?? []), pid])
+  }
+  const out: number[] = []
+  const queue = [root]
+  while (queue.length > 0) {
+    for (const k of kids.get(queue.shift()!) ?? []) {
+      out.push(k)
+      queue.push(k)
+    }
+  }
+  return out
+}
+
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/** SIGTERM, até ~500 ms de espera, SIGKILL nos que sobraram. */
+async function killPids(pids: number[]): Promise<void> {
+  const live = pids.filter(alive)
+  for (const p of live) {
+    try {
+      process.kill(p, 'SIGTERM')
+    } catch {
+      // saiu entre a checagem e o sinal
+    }
+  }
+  for (let i = 0; i < 10 && live.some(alive); i++) await sleep(50)
+  for (const p of live.filter(alive)) {
+    try {
+      process.kill(p, 'SIGKILL')
+    } catch {
+      // idem
+    }
+  }
+}
+
+/** O login foi interrompido por sinal (Ctrl-C, kill, fechar o terminal); a limpeza já rodou. */
+export class LoginInterruptedError extends SbError {
+  constructor(signal: string) {
+    super(`login interrompido (${signal}); nada foi salvo`, EXIT.CHECK_FAILED)
+    this.name = 'LoginInterruptedError'
+  }
+}
 
 /**
  * Roda `claude setup-token` num pseudo-terminal (via `script`: funciona sem TTY na entrada) com um
  * CLAUDE_CONFIG_DIR temporário, apagado no `finally` (nada encosta no keychain). Chama `onUrl` ao ver o link de
- * autorização e devolve os candidatos a token. Para 2 s depois de ver o token; manda Enter (até 3 vezes) se nenhuma
- * URL aparecer. Claude que falha, some ou passa de `limitMs` sem entregar token → exit 4. O buffer bruto nunca sai daqui.
+ * autorização (inteiro: só depois que algo o segue no buffer, ou no fim da saída) e devolve os candidatos a token.
+ * Para 2 s depois de ver o token; manda Enter (até 3 vezes) se nenhuma URL aparecer. Claude que falha, some ou passa
+ * de `limitMs` sem entregar token → exit 4. Em toda saída (sucesso, erro, limite, sinal) mata o claude e seus
+ * descendentes (o `script` o põe noutra sessão: matar o grupo do bash não o alcança). O buffer bruto nunca sai daqui.
  */
 export async function runSetupToken(
   ctx: Ctx,
@@ -89,12 +158,12 @@ export async function runSetupToken(
   const tmp = mkdtempSync(join(ctx.env.TMPDIR || tmpdir(), 'sb-login-')) // 0700
   let child: ChildProcess | undefined
   let buf = ''
-  // `detached`: o processo lidera um grupo próprio, e matar o grupo leva junto `cat` e `script`
-  // (o claude, na sessão do PTY, recebe o SIGHUP quando o `script` morre)
-  const killChild = (signal: NodeJS.Signals): void => {
+  let interrupted: string | undefined
+  let stopNow: (() => void) | undefined
+  const killGroup = (signal: NodeJS.Signals): void => {
     if (!child?.pid) return
     try {
-      process.kill(-child.pid, signal)
+      process.kill(-child.pid, signal) // bash/script/cat (o `detached` os põe num grupo próprio)
     } catch {
       try {
         child.kill(signal)
@@ -103,18 +172,23 @@ export async function runSetupToken(
       }
     }
   }
-  // Ctrl-C / kill no meio do login: o `finally` não roda, então a limpeza sai daqui
-  const onSignal = (signal: NodeJS.Signals): void => {
-    killChild('SIGKILL')
-    rmSync(tmp, { recursive: true, force: true })
-    process.exit(128 + (signal === 'SIGINT' ? 2 : 15))
-  }
-  process.once('SIGINT', onSignal)
-  process.once('SIGTERM', onSignal)
+  const running = (): boolean => child !== undefined && child.exitCode === null && child.signalCode === null
+
+  // Ctrl-C / kill / terminal fechado: encerra a espera; quem chamou limpa (mesmo `finally`) e propaga o erro
+  const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const
+  const handlers = SIGNALS.map((sg) => {
+    const h = (): void => {
+      interrupted ??= sg
+      stopNow?.()
+    }
+    process.on(sg, h)
+    return [sg, h] as const
+  })
+
   try {
     writeFileSync(join(tmp, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark' }), { mode: 0o600 })
     const env = { ...cleanEnv(ctx.env), CLAUDE_CONFIG_DIR: tmp, TERM: 'xterm-256color' }
-    const proc = spawn('bash', ['-c', PIPELINE, PTY_SCRIPT, claudeBin(ctx.env)], { env, stdio: ['pipe', 'pipe', 'pipe'], detached: true })
+    const proc = spawn('/bin/bash', ['-c', PIPELINE, PTY_SCRIPT, claudeBin(ctx.env)], { env, stdio: ['pipe', 'pipe', 'pipe'], detached: true })
     child = proc
     // o `script` acabou (a saída fechou): solta o `cat` da substituição de processo
     proc.stdout.once('end', () => proc.stdin.end())
@@ -128,26 +202,30 @@ export async function runSetupToken(
 
     const enter = (): void => void proc.stdin.write('\r')
     let timedOut = false
+    let urlSent = false
+    /** A URL só vale inteira: o `\S+` final vai até o fim do buffer, então exige algo depois dela (o claude imprime \r\n). */
+    const scanUrl = (final: boolean): void => {
+      if (urlSent) return
+      const text = stripAnsi(buf)
+      const m = URL_RE.exec(text)
+      if (m && (final || m.index + m[0].length < text.length)) {
+        urlSent = true
+        onUrl(m[0])
+      }
+    }
     const start = Date.now()
     const stopped = new Promise<void>((resolve) => {
-      let url = false
       let tokenAt = 0
       let enters = 0
       const done = (): void => {
         clearInterval(tick)
         resolve()
       }
+      stopNow = done
       proc.stdout.on('data', (d: string) => {
         buf += d
-        const text = stripAnsi(buf)
-        if (!url) {
-          const m = URL_RE.exec(text)
-          if (m) {
-            url = true
-            onUrl(m[0])
-          }
-        }
-        if (!tokenAt && new RegExp(TOKEN_RE.source).test(text)) tokenAt = Date.now()
+        scanUrl(false)
+        if (!tokenAt && new RegExp(TOKEN_RE.source).test(stripAnsi(buf))) tokenAt = Date.now()
       })
       const tick = setInterval(() => {
         const now = Date.now()
@@ -157,7 +235,7 @@ export async function runSetupToken(
           return done()
         }
         // menu antes do link (tema, método de login): Enter = opção padrão
-        if (!url && enters < 3 && now - start > t.enterAfterMs + enters * t.enterEveryMs) {
+        if (!urlSent && enters < 3 && now - start > t.enterAfterMs + enters * t.enterEveryMs) {
           enter()
           enters++
         }
@@ -165,6 +243,8 @@ export async function runSetupToken(
       void exited.then(done)
     })
     await stopped // o `finally` abaixo encerra o processo e apaga o diretório
+    scanUrl(true) // fim da saída (ou limite): a URL que sobrou no fim do buffer é a inteira
+    if (interrupted) throw new LoginInterruptedError(interrupted)
 
     const tokens = extractTokens(buf)
     if (tokens.length > 0) return tokens
@@ -175,21 +255,23 @@ export async function runSetupToken(
     if (end && end.code !== 0) throw new SbError(`o claude setup-token falhou (código ${end.code})`, EXIT.CLAUDE, '  confira se o `claude` está instalado e funciona')
     return []
   } finally {
-    process.off('SIGINT', onSignal)
-    process.off('SIGTERM', onSignal)
-    if (child && child.exitCode === null && child.signalCode === null) {
+    for (const [sg, h] of handlers) process.off(sg, h)
+    if (child?.pid && running()) {
+      const known = descendantsOf(child.pid) // enquanto o `script` vive dá para achar o claude (depois ele vira órfão)
       try {
         child.stdin?.write('\r')
       } catch {
         // sem entrada
       }
-      await new Promise((r) => setTimeout(r, 300))
-      if (child.exitCode === null && child.signalCode === null) {
-        killChild('SIGTERM')
+      await waitClose(child, 300) // chance de sair sozinho
+      // o claude vive noutra sessão: o kill do grupo não o alcança, então os descendentes morrem um a um
+      await killPids([...new Set([...known, ...(running() ? descendantsOf(child.pid) : [])])])
+      if (running()) {
+        killGroup('SIGTERM')
         await waitClose(child, 3_000)
       }
-      if (child.exitCode === null && child.signalCode === null) {
-        killChild('SIGKILL')
+      if (running()) {
+        killGroup('SIGKILL')
         await waitClose(child, 2_000)
       }
     }
@@ -199,6 +281,7 @@ export async function runSetupToken(
 
 function waitClose(child: ChildProcess, ms: number): Promise<void> {
   return new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) return resolve()
     const timer = setTimeout(resolve, ms)
     child.once('close', () => {
       clearTimeout(timer)
@@ -254,6 +337,8 @@ export interface LoginOpts {
   terminal: boolean
   readPasted?: () => Promise<string>
   attach?: AttachSpec
+  /** limite do `setup-token` em ms (padrão 900 s; os testes encurtam) */
+  limitMs?: number
   /** link de autorização (não é segredo): o comando o mostra ao usuário */
   onUrl?: (url: string) => void
 }
@@ -277,7 +362,7 @@ export function attachCommandLine(account: string, spec: AttachSpec): string {
  * Tudo que dá para recusar ANTES de abrir o navegador: nome, `keychain`, spec do attach, config válida e,
  * com `--attach`, o mux existente (config ausente conta como mux inexistente: exit 3, não exit 2).
  */
-export async function preflightLogin(ctx: Ctx, account: string, attach?: AttachSpec): Promise<void> {
+export async function preflightLogin(ctx: Ctx, account: string, attach?: AttachSpec, o: { lock?: boolean } = {}): Promise<void> {
   assertSafeName(account)
   if (account === KEYCHAIN) throw usage('"keychain" é reservado: usa o login do keychain do claude e não se registra', '  escolha outro nome')
   if (attach) {
@@ -287,6 +372,17 @@ export async function preflightLogin(ctx: Ctx, account: string, attach?: AttachS
   } else if (existsSync(ctx.paths.configFile)) {
     await loadConfig(ctx.paths) // config inválida: exit 2 antes de gastar um login
   }
+  // `lock`: o pai desanexado recusa antes de spawnar (sem tomar a trava: quem a toma é o filho, em `login`)
+  if (o.lock) {
+    const busy = peekPidFile(loginLockFile(ctx.paths))
+    if (busy) throw loginBusy(ctx, busy.pid)
+  }
+}
+
+/** Outro login (PTY) em andamento: exit 5. */
+function loginBusy(ctx: Ctx, pid: number | undefined): SbError {
+  const who = pid === undefined ? `trava ilegível: ${loginLockFile(ctx.paths)}` : `pid ${pid}`
+  return new SbError(`já tem um login em andamento (${who}); veja ${logFile(ctx.paths, 'login')}`, EXIT.LOCKED)
 }
 
 /** A conta precisa de login (não registrada ou sem token)? `keychain` nunca. */
@@ -305,10 +401,14 @@ async function candidatesFor(ctx: Ctx, o: LoginOpts): Promise<string[]> {
     return [pasted]
   }
   ctx.log('login', 'abrindo')
-  return runSetupToken(ctx, (url) => {
-    ctx.log('login', `url ${url}`)
-    o.onUrl?.(url)
-  })
+  return runSetupToken(
+    ctx,
+    (url) => {
+      ctx.log('login', `url ${url}`)
+      o.onUrl?.(url)
+    },
+    o.limitMs,
+  )
 }
 
 /** O 1º candidato com sonda `ok` (401/403, rede e respostas estranhas não passam: nada é salvo). */
@@ -355,8 +455,19 @@ async function saveAndRegister(ctx: Ctx, account: string, token: string): Promis
  * O log (`login.log`) recebe só marcos: abrindo, url, validando, attach, FIM ok|falhou.
  */
 export async function login(ctx: Ctx, account: string, o: LoginOpts): Promise<LoginResult> {
+  let held = false
+  let logFailure = true
   try {
     await preflightLogin(ctx, account, o.attach)
+    // um `setup-token` por vez (o log e o link seriam trocados): a trava vale do PTY até o FIM; colar o token não precisa
+    if (!o.terminal) {
+      const got = await acquirePidFile(loginLockFile(ctx.paths))
+      if (!got.ok) {
+        logFailure = false // o log é do login que está rodando: um FIM falhou nosso o enganaria
+        throw loginBusy(ctx, got.pid)
+      }
+      held = true
+    }
     const candidates = await candidatesFor(ctx, o)
     if (candidates.length === 0) {
       throw new SbError('não consegui capturar o token do claude', EXIT.CHECK_FAILED, `  rode \`sb login ${account} --terminal\` e cole o token`)
@@ -370,7 +481,8 @@ export async function login(ctx: Ctx, account: string, o: LoginOpts): Promise<Lo
         result.attached = (await attachAccount(ctx, account, o.attach)).changed
       } catch (e) {
         if (!(e instanceof SbError)) throw e
-        throw new SbError(
+        // o exit é o do attach (3 no caso comum; trava presa = 5; config inválida = 2): passa direto
+        throw new AttachAfterLoginError(
           `login feito (token salvo e conta registrada), mas o attach falhou: ${e.message}`,
           e.exit,
           `  quando resolver, rode \`${attachCommandLine(account, o.attach)}\``,
@@ -380,7 +492,9 @@ export async function login(ctx: Ctx, account: string, o: LoginOpts): Promise<Lo
     ctx.log('login', 'FIM ok')
     return result
   } catch (e) {
-    ctx.log('login', `FIM falhou: ${e instanceof SbError ? e.message : 'erro inesperado'}`)
+    if (logFailure) ctx.log('login', `FIM falhou: ${e instanceof SbError ? e.message : 'erro inesperado'}`)
     throw e
+  } finally {
+    if (held) releasePidFile(loginLockFile(ctx.paths))
   }
 }

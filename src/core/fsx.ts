@@ -194,3 +194,39 @@ function readFileSyncSafe(file: string): string | null {
     return null
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Arquivo de pid (ex.: login em andamento): mesma mecânica do lock (O_EXCL + pid, dono morto é tomado),
+// mas sem espera longa: quem chega e encontra dono vivo recebe a recusa na hora.
+
+export type PidFileBusy = { pid?: number }
+
+/** Dono atual do arquivo de pid, sem tomá-lo: `undefined` = livre (ausente ou de pid morto); `{}` = ocupado e ilegível (falha fechado). */
+export function peekPidFile(file: string): PidFileBusy | undefined {
+  const s = inspect(file)
+  if (s.kind === 'live') return { pid: s.pid }
+  if (s.kind === 'gone' || s.kind === 'stale') return undefined
+  return {} // unknown (EACCES, diretório...) ou forming: não dá para julgar, conta como ocupado
+}
+
+/**
+ * Toma o arquivo de pid para este processo. `{ ok: true }` ou `{ ok: false, pid? }` (dono vivo, ou ilegível: fail-closed).
+ * Espera no máximo `waitMs` (curta) só para um dono ainda se formando ou uma troca de lock velho; nunca gira sem fim.
+ */
+export async function acquirePidFile(file: string, waitMs = 1_000): Promise<{ ok: true } | ({ ok: false } & PidFileBusy)> {
+  mkdirPrivate(dirname(file))
+  const deadline = Date.now() + waitMs
+  for (;;) {
+    if (tryCreate(file)) return { ok: true }
+    const state = inspect(file)
+    if (state.kind === 'live') return { ok: false, pid: state.pid }
+    if (state.kind === 'unknown' || Date.now() >= deadline) return { ok: false }
+    if (state.kind === 'stale') breakStale(file)
+    await sleep(state.kind === 'stale' || state.kind === 'gone' ? 1 : POLL_MS)
+  }
+}
+
+/** Larga o arquivo de pid, só se ainda for nosso. */
+export function releasePidFile(file: string): void {
+  if (readFileSyncSafe(file) === String(process.pid)) rmSync(file, { force: true })
+}

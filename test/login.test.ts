@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { runLogin } from '../src/commands/login.js'
 import { loadConfig } from '../src/core/config.js'
 import { defaultCtx, type Ctx } from '../src/core/ctx.js'
 import { EXIT, SbError } from '../src/core/errors.js'
-import { extractTokens, login, runSetupToken } from '../src/core/login.js'
-import { logFile, tokenFile } from '../src/core/paths.js'
+import { AttachAfterLoginError, extractTokens, login, runSetupToken } from '../src/core/login.js'
+import { loginLockFile, logFile, tokenFile } from '../src/core/paths.js'
 import { FAKE_TOKEN, fakeApi, populatedSandbox, sandbox, type FakeApi, type Sandbox } from './helpers.js'
 
 const URL_LINE = 'https://claude.ai/oauth/authorize?code=true&client_id=abc&state=xyz'
@@ -162,6 +162,66 @@ describe('runSetupToken (claude falso, PTY via script)', () => {
     const c = sb.calls()[0]!
     expect(existsSync(c.configDir!)).toBe(false)
     await waitFor(() => !alive(c.pid!), 5_000) // nenhum processo órfão
+  })
+
+
+  test('URL cortada entre duas escritas: onUrl dispara UMA vez, com a URL inteira', async () => {
+    const sb = sandbox()
+    fake(sb, 'setup-token.chunks', JSON.stringify(['Abrindo\r\n' + URL_LINE.slice(0, 60), URL_LINE.slice(60) + '\r\n', FAKE_TOKEN + '\r\n']))
+    const urls: string[] = []
+    const tokens = await runSetupToken(sb.ctx(), (u) => urls.push(u))
+    expect(urls).toEqual([URL_LINE])
+    expect(tokens).toEqual([FAKE_TOKEN])
+  })
+
+  test('saída termina logo depois da URL, sem quebra de linha: a URL inteira chega na saída', async () => {
+    const sb = sandbox()
+    fake(sb, 'setup-token.chunks', JSON.stringify(['Abrindo\r\n' + URL_LINE]))
+    const urls: string[] = []
+    expect(await runSetupToken(sb.ctx(), (u) => urls.push(u))).toEqual([])
+    expect(urls).toEqual([URL_LINE])
+  })
+
+  test('claude que ignora SIGHUP/SIGTERM: no limite, nenhum processo dele sobra (nem o filho) e o tmp some', async () => {
+    const sb = sandbox()
+    fake(sb, 'setup-token.hang-ignore-hup', '1')
+    const pidsFile = join(sb.env.FAKE_CLAUDE_DIR!, 'pids.txt')
+    const recorded = (): number[] => (existsSync(pidsFile) ? readFileSync(pidsFile, 'utf8').split('\n').filter(Boolean).map(Number) : [])
+    try {
+      const r = await exitOf(runSetupToken(sb.ctx(), () => undefined, 1_500))
+      expect(r?.exit).toBe(EXIT.CLAUDE)
+      const pids = recorded()
+      expect(pids.length).toBe(2)
+      await waitFor(() => pids.every((p) => !alive(p)), 3_000)
+      expect(existsSync(sb.calls()[0]!.configDir!)).toBe(false)
+    } finally {
+      for (const p of recorded()) {
+        try {
+          process.kill(p, 'SIGKILL')
+        } catch {
+          // já morreu
+        }
+      }
+    }
+  })
+
+  test('SIGHUP no meio: limpa (tmp, processos), lança LoginInterruptedError e o login registra FIM falhou e solta a trava', async () => {
+    const sb = withRef()
+    fake(sb, 'setup-token.sleep', '60000')
+    const ctx = ctxFor(sb, await okApi())
+    const p = exitOf(login(ctx, 'nova', { terminal: false }))
+    await waitFor(() => sb.calls().length === 1)
+    await sleep(200)
+    process.emit('SIGHUP')
+    const r = await p
+    expect(r?.exit).toBe(EXIT.CHECK_FAILED)
+    expect(r?.message).toContain('interrompido')
+    const c = sb.calls()[0]!
+    expect(existsSync(c.configDir!)).toBe(false)
+    await waitFor(() => !alive(c.pid!), 5_000)
+    expect(readLog(sb)).toContain('FIM falhou')
+    expect(existsSync(loginLockFile(sb.paths))).toBe(false)
+    expect(existsSync(tokenFile(sb.paths, 'nova'))).toBe(false)
   })
 
   test('sem URL: manda Enter (\\r) e o claude falso, que esperava, segue', async () => {
@@ -337,6 +397,17 @@ describe('login()', () => {
     expect(existsSync(tokenFile(sb.paths, 'nova'))).toBe(false)
   })
 
+  test('falha do attach depois do login é um AttachAfterLoginError (e mantém o exit do attach)', async () => {
+    const sb = withRef()
+    const readPasted = async (): Promise<string> => {
+      writeConfig(sb, { switchboard: 1, accounts: { ref: {} }, mux: {} })
+      return FAKE_TOKEN
+    }
+    const e = await login(ctxFor(sb, await okApi()), 'nova', { terminal: true, readPasted, attach: { mux: 'bk' } }).catch((x: unknown) => x)
+    expect(e).toBeInstanceOf(AttachAfterLoginError)
+    expect((e as SbError).exit).toBe(EXIT.USAGE)
+  })
+
   test('o attach falha depois do login → token e registro ficam, exit 3, mensagem manda rodar `sb attach`', async () => {
     const sb = withRef()
     const ctx = ctxFor(sb, await okApi())
@@ -352,6 +423,80 @@ describe('login()', () => {
     expect(readFileSync(tokenFile(sb.paths, 'nova'), 'utf8')).toContain(FAKE_TOKEN)
     expect(Object.keys((await loadConfig(sb.paths)).accounts).sort()).toEqual(['nova', 'ref'])
     expect(readLog(sb)).toContain('FIM falhou')
+  })
+})
+
+
+describe('trava de login em andamento (login.pid)', () => {
+  const lock = (sb: Sandbox, content: string): string => {
+    const f = loginLockFile(sb.paths)
+    mkdirSync(dirname(f), { recursive: true })
+    writeFileSync(f, content)
+    return f
+  }
+
+  test('outro login vivo segurando a trava → exit 5, claude NÃO chamado, trava intacta', async () => {
+    const sb = withRef()
+    fakeOutput(sb)
+    const f = lock(sb, '1') // pid 1 está sempre vivo
+    const r = await exitOf(login(ctxFor(sb, await okApi()), 'nova', { terminal: false }))
+    expect(r?.exit).toBe(EXIT.LOCKED)
+    expect(r?.message).toContain('já tem um login em andamento (pid 1)')
+    expect(r?.message).toContain('login.log')
+    expect(sb.calls()).toEqual([])
+    expect(readFileSync(f, 'utf8')).toBe('1')
+  })
+
+  test('trava de pid morto é tomada; some depois do sucesso', async () => {
+    const sb = withRef()
+    fakeOutput(sb)
+    const f = lock(sb, '999999')
+    await login(ctxFor(sb, await okApi()), 'nova', { terminal: false })
+    expect(existsSync(f)).toBe(false)
+  })
+
+  test('trava some depois de falha (sonda 401) e depois de limite estourado', async () => {
+    const sb = withRef()
+    fakeOutput(sb)
+    await exitOf(login(ctxFor(sb, await deadApi()), 'nova', { terminal: false }))
+    expect(existsSync(loginLockFile(sb.paths))).toBe(false)
+
+    const sb2 = withRef()
+    fake(sb2, 'setup-token.sleep', '60000')
+    const r = await exitOf(login(ctxFor(sb2, await okApi()), 'nova', { terminal: false, limitMs: 500 }))
+    expect(r?.exit).toBe(EXIT.CLAUDE)
+    expect(existsSync(loginLockFile(sb2.paths))).toBe(false)
+  })
+
+  test('--terminal (colar) não precisa da trava', async () => {
+    const sb = withRef()
+    lock(sb, '1')
+    const r = await login(ctxFor(sb, await okApi()), 'nova', { terminal: true, readPasted: async () => FAKE_TOKEN })
+    expect(r.created).toBe(true)
+    expect(readFileSync(loginLockFile(sb.paths), 'utf8')).toBe('1') // e não mexeu na trava alheia
+  })
+
+  test('trava ilegível (diretório no lugar) falha fechado: exit 5, claude não chamado', async () => {
+    const sb = withRef()
+    fakeOutput(sb)
+    mkdirSync(loginLockFile(sb.paths), { recursive: true })
+    const r = await exitOf(login(ctxFor(sb, await okApi()), 'nova', { terminal: false }))
+    expect(r?.exit).toBe(EXIT.LOCKED)
+    expect(sb.calls()).toEqual([])
+    rmSync(loginLockFile(sb.paths), { recursive: true })
+  })
+
+  test('o pai desanexado recusa ANTES de spawnar o filho (exit 5, log intocado)', async () => {
+    const sb = withRef()
+    fakeOutput(sb)
+    lock(sb, '1')
+    const r = await sb.runSbAsync(['login', 'nova'])
+    expect(r.code).toBe(5)
+    expect(r.stderr).toContain('já tem um login em andamento')
+    const r2 = await sb.runSbAsync(['attach', 'nova', 'bk'])
+    expect(r2.code).toBe(5)
+    expect(sb.calls()).toEqual([])
+    expect(readLog(sb)).toBe('')
   })
 })
 
