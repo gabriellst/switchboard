@@ -46,16 +46,36 @@ function findDuplicateKeys(node: Node | undefined, path: string[] = [], out: str
   return out
 }
 
-/** Mensagens do zod em português (as das invariantes já saem em português do superRefine). */
+const TYPE_PT: Record<string, string> = {
+  boolean: 'booleano (true ou false)',
+  string: 'texto',
+  number: 'número',
+  array: 'lista',
+  object: 'objeto',
+  record: 'objeto',
+}
+
+/**
+ * Mensagens do zod em português (as das invariantes já saem em português do superRefine).
+ * Precisa de `reportInput: true` no parse: sem ele `issue.input` nunca vem, e não dá para
+ * distinguir campo ausente (`input === undefined`) de campo presente com tipo errado.
+ */
 function ptMessage(i: $ZodIssue): string {
   switch (i.code) {
     case 'unrecognized_keys':
       return `chave desconhecida: ${i.keys.map((k) => `"${k}"`).join(', ')}`
     case 'invalid_type':
-      return i.input === undefined ? 'campo obrigatório' : `tipo inválido (esperado ${i.expected})`
+      return i.input === undefined ? 'campo obrigatório' : `tipo inválido: esperado ${TYPE_PT[i.expected] ?? i.expected}`
     case 'too_small':
-      return i.origin === 'array' ? `precisa de pelo menos ${String(i.minimum)} item` : i.message
+      if (i.origin === 'array') return `precisa de pelo menos ${String(i.minimum)} item`
+      if (i.origin === 'number') return `deve ser ${i.inclusive ? 'no mínimo' : 'maior que'} ${String(i.minimum)}`
+      return i.message
+    case 'too_big':
+      return i.origin === 'number' ? `deve ser ${i.inclusive ? 'no máximo' : 'menor que'} ${String(i.maximum)}` : i.message
+    case 'invalid_key':
+      return 'nome inválido — use minúsculas, números, - e _ (até 32)'
     case 'invalid_value':
+      if (i.input === undefined) return 'campo obrigatório'
       return `valor inválido (esperado ${i.values.map((v) => JSON.stringify(v)).join(' ou ')})`
     default:
       return i.message
@@ -81,7 +101,7 @@ export function parseConfig(text: string, file: string, home?: string): Config {
     )
   }
 
-  const parsed = makeConfig(home).safeParse(raw)
+  const parsed = makeConfig(home).safeParse(raw, { reportInput: true })
   if (!parsed.success) {
     throw invalid(
       file,

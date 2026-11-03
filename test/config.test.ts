@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { parse as parseJsonc } from 'jsonc-parser'
 import { editConfig, ensureConfig, InvalidConfigError, loadConfig, parseConfig, parseDuration } from '../src/core/config.js'
 import { EXIT, SbError } from '../src/core/errors.js'
+import { z } from 'zod'
+import { Config } from '../src/core/schema.js'
 import { sandbox } from './helpers.js'
 
 // o JSONC do §5 do design, com os comentários
@@ -315,4 +317,44 @@ test('parseDuration', () => {
   expect(() => parseDuration('0s')).toThrow()
   expect(() => parseDuration('')).toThrow()
   expect(() => parseDuration('m5')).toThrow()
+})
+
+describe('mensagens do zod em português', () => {
+  test('campo presente com tipo errado → "tipo inválido", não "campo obrigatório"', () => {
+    const a = structuredClone(EXAMPLE_OBJ)
+    a.swap.auto = 'yes'
+    expect(detailOf(JSON.stringify(a))).toMatch(/^ {2}swap\.auto: tipo inválido: esperado booleano/m)
+    expect(detailOf(JSON.stringify(a))).not.toContain('campo obrigatório')
+    const b = structuredClone(EXAMPLE_OBJ)
+    b.mux.bk.account = 5
+    expect(detailOf(JSON.stringify(b))).toMatch(/^ {2}mux\.bk\.account: tipo inválido: esperado texto/m)
+    const c = structuredClone(EXAMPLE_OBJ)
+    c.mux.bk.accounts = null
+    expect(detailOf(JSON.stringify(c))).toMatch(/^ {2}mux\.bk\.accounts: tipo inválido: esperado lista/m)
+  })
+  test('campo realmente ausente → "campo obrigatório"', () => {
+    const obj = structuredClone(EXAMPLE_OBJ)
+    delete obj.mux.bk.account
+    expect(detailOf(JSON.stringify(obj))).toMatch(/^ {2}mux\.bk\.account: campo obrigatório/m)
+    expect(detailOf('{"accounts":{},"mux":{}}')).toMatch(/^ {2}switchboard: campo obrigatório/m)
+  })
+  test('too_big e too_small numéricos', () => {
+    const big = structuredClone(EXAMPLE_OBJ)
+    big.swap.threshold.fiveHour = 1.5
+    expect(detailOf(JSON.stringify(big))).toMatch(/^ {2}swap\.threshold\.fiveHour: deve ser no máximo 1$/m)
+    const small = structuredClone(EXAMPLE_OBJ)
+    small.swap.threshold.sevenDay = 0
+    expect(detailOf(JSON.stringify(small))).toMatch(/^ {2}swap\.threshold\.sevenDay: deve ser maior que 0$/m)
+  })
+  test('invalid_key (nome de conta ou mux inválido)', () => {
+    const obj = structuredClone(EXAMPLE_OBJ)
+    obj.accounts['Cli X'] = {}
+    expect(detailOf(JSON.stringify(obj))).toMatch(/^ {2}accounts\.Cli X: nome inválido — use minúsculas, números, - e _ \(até 32\)$/m)
+  })
+})
+
+test('schema.json commitado é o que scripts/gen-schema.ts gera (não fica obsoleto)', () => {
+  const generated = { title: 'switchboard config', ...z.toJSONSchema(Config, { target: 'draft-7', io: 'input' }) }
+  const committed = JSON.parse(readFileSync(join(import.meta.dir, '..', 'schema.json'), 'utf8')) as unknown
+  expect(committed).toEqual(JSON.parse(JSON.stringify(generated)))
 })
