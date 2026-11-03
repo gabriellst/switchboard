@@ -2,9 +2,21 @@ import { expect, test } from 'bun:test'
 import { readFileSync, statSync } from 'node:fs'
 import { filesUnder, FAKE_TOKEN, populatedSandbox } from './helpers.js'
 
-const CASES: string[][] = [['--version'], [], ['usage', '--json'], ['accounts', '--json']] // cada task que cria comando acrescenta casos
+// [args, exit esperado]; cada task que cria comando acrescenta casos. O teste checa vazamento, não sucesso:
+// uma recusa por regra (exit 3) também precisa sair limpa.
+const CASES: Array<[string[], number]> = [
+  [['--version'], 0],
+  [[], 0],
+  [['usage', '--json'], 0],
+  [['accounts', '--json'], 0],
+  [['mux'], 0],
+  [['which', '--json'], 0],
+  [['attach', 'admin1', 'bk', '--pool'], 0], // admin1 já está no pool do bk: idempotente
+  [['detach', 'admin1', 'bk'], 0],
+  [['accounts', 'rm', 'admin1'], 3], // sem --yes: recusa
+]
 
-test.each(CASES)('sem token na saída: sb %p', (...args) => {
+test.each(CASES)('sem token na saída: sb %p', (args, code) => {
   const sb = populatedSandbox() // config + tokens FAKE_TOKEN + usage + jobs (cresce com as tasks)
   const tokens = filesUnder(sb.paths.stateDir).filter((f) => f.includes('/tokens/'))
   expect(tokens.length).toBeGreaterThan(0) // o cenário tem segredo de verdade; senão o teste seria vazio
@@ -13,7 +25,7 @@ test.each(CASES)('sem token na saída: sb %p', (...args) => {
 
   const r = sb.runSb(args)
 
-  expect(r.code).toBe(0)
+  expect(r.code).toBe(code)
   expect(r.stdout + r.stderr).not.toMatch(/sk-ant-/)
   // nada fora de tokens/ (estado, config, jobs) pode conter token, antes ou depois do comando
   const outside = [

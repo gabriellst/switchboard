@@ -166,3 +166,30 @@ export function renderAccounts(accounts: AccountInfo[], opts: RenderOpts): strin
   })
   return `${lines.map((l) => l.trimEnd()).join('\n')}\n`
 }
+
+export interface MuxRow {
+  name: string
+  root: string
+  default: boolean
+  current: string | null
+  preferred: string
+  accounts: string[]
+  pool: string[]
+}
+
+/** `sb mux`: um mux por linha; `*` marca o default. */
+export function renderMuxList(rows: MuxRow[]): string {
+  if (rows.length === 0) return 'nenhum mux definido (crie um com `sb mux add <nome> --root <pasta> --account <conta>`)\n'
+  const head = ['mux', 'root', 'atual', 'preferida', 'pool (ordem = prioridade)', 'só permitidas']
+  const body = rows.map((r) => [
+    r.default ? `${r.name} *` : r.name,
+    r.root,
+    r.current ?? '—',
+    r.preferred,
+    r.pool.length ? r.pool.join(' → ') : 'sem hot-swap',
+    r.accounts.filter((a) => !r.pool.includes(a)).join(', ') || '—',
+  ])
+  const widths = head.map((h, i) => Math.max(h.length, ...body.map((b) => b[i]!.length)))
+  const line = (cols: string[]): string => cols.map((c, i) => (i === cols.length - 1 ? c : cell(c, widths[i]!))).join('  ')
+  return `${[line(head), ...body.map(line)].join('\n')}\n\n* = default (pastas fora de todo root)\n`
+}
