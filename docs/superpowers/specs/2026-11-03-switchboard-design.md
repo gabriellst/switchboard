@@ -1,6 +1,7 @@
 # switchboard (`sb`) — design
 
 > Status: design aprovado em conversa em 03/11/2026, aguardando o plano de implementação.
+> Revisão de 03/11 (tarde): **prioridade e hot-swap são por mux, não por conta** [usuário] (§4, §5).
 > Substitui o `~/.local/bin/claude-conta` (Python, 900 linhas) quando estiver pronto.
 > Marcação: **[usuário]** = decidido pelo usuário · **[minha escolha]** = decisão de quem escreveu o
 > design, que o usuário viu e não contestou, mas pode mudar · **[builder]** = fica para quem implementa.
@@ -22,8 +23,10 @@ O `switchboard` é uma CLI no molde do `plugboard` (`gabriellst/plugboard`) que:
 2. **troca a conta de um mux quando ela estiver acabando** (hot-swap), à mão ou sozinho **[usuário]**;
 3. **troca só uma sessão específica**, quando quiser **[usuário]**;
 4. **mostra o uso de cada conta e de todas juntas**: quanto já foi, se resetou, quando reseta **[usuário]**;
-5. **respeita uma ordem de prioridade** entre contas para escolher o destino da troca **[usuário]**;
-6. **sabe quais contas podem entrar no hot-swap** e quais não **[usuário]**.
+5. **respeita uma ordem de prioridade por mux** para escolher o destino da troca **[usuário]**;
+6. **cada mux tem o seu conjunto de contas permitidas e o seu conjunto de contas de hot-swap**
+   (o `pool`, ordenado); uma conta pode estar no pool de um mux e só ser permitida em outro, ou
+   nem aparecer **[usuário, 03/11 tarde]**.
 
 Sucesso = o usuário abre o cmux, cada aba trabalha na sua conta, nunca mais pensa em limite:
 quando uma conta acaba, o mux migra sozinho para a próxima e volta quando ela resetar.
@@ -108,9 +111,9 @@ Estes fatos são restrições. Foram medidos, não supostos.
 
 | Conceito | O que é |
 |---|---|
-| **Conta** | Um token de assinatura com nome, `priority` (inteiro; **menor = mais prioritária**) e `pool` (bool: pode ser destino de hot-swap). **[usuário]** prioridade e pool; **[minha escolha]** "menor = mais prioritária". |
+| **Conta** | Um token de assinatura com nome. Só o registro: **sem prioridade e sem pool próprios** (isso é de cada mux). |
 | **keychain** | Conta especial e reservada: o login do keychain. Settings = `{}`. Nunca medida, nunca no pool, nunca escrita. |
-| **Mux** | Nome + `root` (pasta) + `account` (a conta **preferida**) + `swap` (bool, default `true`). Corresponde a uma aba do cmux rodando `sb agents <mux>`. |
+| **Mux** | Nome + `root` (pasta) + `account` (a conta **preferida**) + `accounts` (as contas que o mux **pode usar**) + `pool` (as contas de **hot-swap**, **em ordem = prioridade**). Corresponde a uma aba do cmux rodando `sb agents <mux>`. Invariantes **[minha escolha]**: `account ∈ accounts`; `pool ⊆ accounts`; `pool` vazio = o mux nunca troca sozinho (substitui o antigo `swap: false`). |
 | **Conta atual do mux** | A conta que o mux está usando agora. Igual à preferida, exceto durante um swap. Estado de runtime, não config. |
 | **Sessão do mux** | Sessão em segundo plano cujo `--settings` aponta para o arquivo do mux. **A pertença é pelo caminho do settings, não pela pasta** **[minha escolha]**. A pasta (`root`, a mais profunda vence) só escolhe o mux quando a sessão nasce fora de uma view (wrapper) ou na adoção/migração. |
 | **Sessão fixa (pin)** | Sessão cujo `--settings` aponta para `pins/<conta>.json`. Fica fora de todo swap. |
@@ -122,15 +125,18 @@ Uma conta está **disponível** quando a última medição diz `5h-utilization <
 `7d-utilization < threshold.sevenDay` e status `allowed` — ou quando o reset da janela que a
 esgotou já passou (mesmo sem medição nova).
 
-A cada avaliação, para cada mux com `swap: true`:
+A cada avaliação, para cada mux com `pool` não vazio:
 
 ```
 desejada(mux) =
   preferida                         se preferida disponível
-  senão, se preferida.pool = false  → preferida   (fica parado nela e avisa)   [usuário]
-  senão, a 1ª conta disponível do pool, por priority, distinta da preferida e sem duplicatas
+  senão, se preferida ∉ mux.pool    → preferida   (fica parado nela e avisa)   [usuário]
+  senão, a 1ª conta disponível de mux.pool (na ordem do pool), distinta da preferida e sem duplicatas
   senão (nenhuma disponível)        → fica na atual e avisa
 ```
+
+A ordem do `pool` é **do mux**: a mesma conta pode ser a 1ª na fila de um mux e a 2ª na de outro,
+e pode estar no pool de vários muxes ao mesmo tempo (cada mux anda na própria fila) **[minha escolha]**.
 
 - Isso dá o **retorno no reset** de graça: quando a preferida volta a estar disponível, ela é a
   desejada outra vez **[usuário: "o ideal é pegar sempre ao resetar"]**.
@@ -138,8 +144,10 @@ desejada(mux) =
 - **Contas duplicadas** contam como uma só (para destino e para o total do pool).
 - Histerese para não oscilar: **[builder]** (ex.: só voltar quando o reset passou ou a utilização caiu
   X pontos abaixo do limite).
-- Mux com `swap: false` nunca troca sozinho (o berzerk). Só `sb swap <mux> <conta>` manual, com a
+- Mux com `pool` vazio nunca troca sozinho (o berzerk). Só `sb swap <mux> <conta>` manual, com a
   conta escrita por extenso, muda um mux desses **[usuário: recomendado aceito]**.
+- **`accounts` é o limite duro:** `sb swap <mux> <conta>` e `sb pin <sessão> <conta>` recusam uma
+  conta que não esteja em `accounts` do mux da sessão **[minha escolha]**.
 - **`sb swap` manual vale até o próximo reset da conta preferida** **[usuário]**: o `runtime.json`
   guarda `{ mux, account, until: <epoch do próximo reset da preferida> }`; até lá o `watch` trata a
   preferida como indisponível *para esse mux* (escolhe a conta manual se ela estiver disponível; se
@@ -185,10 +193,8 @@ sessão ficar `busy` esperando uma escolha, a regra para esse estado entra antes
 {
   "$schema": "…/schema.json",
   "switchboard": 1,
-  "accounts": {
-    "gabriel":   { "priority": 1, "pool": true },
-    "admin1":    { "priority": 2, "pool": true },
-    "cliente-x": { "priority": 9, "pool": false }
+  "accounts": {                         // só o registro; os tokens ficam em tokens/
+    "gabriel": {}, "admin1": {}, "cliente-x": {}
   },
   "swap": {
     "auto": true,
@@ -198,9 +204,24 @@ sessão ficar `busy` esperando uma escolha, a regra para esse estado entra antes
   },
   "default": "bk",                      // mux para pastas que não casam com nenhum root [minha escolha]
   "mux": {
-    "bk":      { "root": "~/Desktop/Projetos/bk-company", "account": "gabriel" },
-    "pessoal": { "root": "~/Desktop/Projetos/pessoal",    "account": "admin1" },
-    "berzerk": { "root": "~/Desktop/Projetos/berzerk",    "account": "keychain", "swap": false }
+    "bk": {
+      "root": "~/Desktop/Projetos/bk-company",
+      "account": "gabriel",                          // preferida
+      "accounts": ["gabriel", "admin1", "cliente-x"], // pode usar
+      "pool": ["gabriel", "admin1"]                  // hot-swap; a ordem é a prioridade
+    },
+    "pessoal": {
+      "root": "~/Desktop/Projetos/pessoal",
+      "account": "admin1",
+      "accounts": ["admin1", "gabriel"],
+      "pool": ["admin1", "gabriel"]                  // ordem própria, diferente da do bk
+    },
+    "berzerk": {
+      "root": "~/Desktop/Projetos/berzerk",
+      "account": "keychain",
+      "accounts": ["keychain"],
+      "pool": []                                     // nunca troca sozinho
+    }
   }
 }
 ```
@@ -224,7 +245,7 @@ sessão ficar `busy` esperando uma escolha, a regra para esse estado entra antes
 - **Duplicatas:** duas contas com os mesmos `5h-reset`, `7d-reset`, `5h-utilization` e
   `7d-utilization` em duas medições seguidas formam um grupo; o painel mostra uma e lista as
   outras como "mesma conta que …" **[minha escolha]**. O builder pode permitir `"sameAs"` explícito.
-- **Total do pool** = média das utilizações das contas distintas do pool, por janela. Só significa
+- **Total do pool** = média das utilizações das contas distintas que estão no `pool` de algum mux, por janela. Só significa
   "quanto do total já foi" se os planos forem iguais; o painel diz isso **[minha escolha]**.
 - keychain: "não medido".
 - Erros de sonda (401 = token morto, 429, rede) aparecem no painel e no `doctor`; conta com token
@@ -238,9 +259,9 @@ Todos com `--json` quando produzem dados; nada interativo por padrão; exit code
 | Comando | Faz |
 |---|---|
 | `sb` · `sb usage [--json] [--watch]` | Painel (abaixo). `--watch` redesenha a cada N s |
-| `sb login <conta> [--priority N] [--no-pool] [--terminal]` | F9; abre o navegador, valida com uma sonda, grava o token (600) e a conta no config. `--terminal`: colar o token |
-| `sb accounts` | Lista contas: prioridade, pool, duplicatas, estado do token |
-| `sb mux [add <nome> --root <pasta> --account <conta> \| rm <nome>]` | Gerencia muxes |
+| `sb login <conta> [--terminal]` | F9; abre o navegador, valida com uma sonda, grava o token (600) e registra a conta (sem prioridade nem pool: isso é do mux). `--terminal`: colar o token |
+| `sb accounts` | Lista contas: duplicatas, estado do token e em quais muxes aparecem (permitida / pool) |
+| `sb mux [add <nome> --root <pasta> --account <conta> [--accounts a,b] [--pool a,b] \| set <nome> … \| rm <nome>]` | Gerencia muxes; `--pool` define a fila (a ordem é a prioridade) |
 | `sb agents [mux]` | `exec claude agents --cwd <root> --settings <state>/mux/<mux>.json`. Sem nome: deduz pela pasta atual |
 | `sb run [mux] -- <args>` | `claude <args> --settings …/mux/<mux>.json` (interativo) |
 | `sb swap <mux> [conta]` | Troca manual; sem conta = a desejada pela regra (§4) ignorando a preferida |
@@ -254,14 +275,19 @@ Painel (números reais de 03/11 11:30):
 
 ```
 $ sb
-conta     prio pool  5h              semanal          muxes
-gabriel    1    ✓    ░░░░░░░░░░  1%  ██░░░░░░░░ 15%   bk
-                     reseta 15:50    reseta 06/11
-admin1     2    ✓    ██░░░░░░░░ 24%  ████░░░░░░ 38%   pessoal
+conta     5h              semanal          muxes
+gabriel   ░░░░░░░░░░  1%  ██░░░░░░░░ 15%   bk (preferida) · pessoal (2º do pool)
+          reseta 15:50    reseta 06/11
+admin1    ██░░░░░░░░ 24%  ████░░░░░░ 38%   pessoal (preferida) · bk (2º do pool)
   └ outra (mesma conta que admin1)
-keychain   –    –    não medido                       berzerk
+keychain  não medido                       berzerk
 ──────────────────────────────────────────────────────────
-pool       5h 13% · semanal 27%      auto-swap ligado (90% / 95%)
+mux       atual     preferida  pool (ordem = prioridade)
+bk        gabriel   gabriel    gabriel → admin1
+pessoal   admin1    admin1     admin1 → gabriel
+berzerk   keychain  keychain   sem hot-swap
+──────────────────────────────────────────────────────────
+total     5h 13% · semanal 27%      auto-swap ligado (90% / 95%)
 sessões fixas: 95b0deff → admin1
 medido há 2 min
 ```
@@ -285,17 +311,20 @@ Erros: link de mux/pin quebrado (F6: a sessão não vai abrir); JSON de token in
 keychain calada); token sem `CLAUDE_CODE_OAUTH_TOKEN`; token morto (401); permissão de
 `tokens/*.json` diferente de 600; sessão em segundo plano sob o root de um mux **sem `--settings`**
 (rodaria no keychain); view `claude agents` aberta sem `--settings` do `sb`.
-Avisos: contas duplicadas no pool; mux preferindo conta fora do pool com `swap: true` (inócuo, mas
-confuso); sessões estranhas (legado `~/.claude/contas/`); `watch` parado.
+Erros de configuração por mux: `account ∉ accounts`; `pool ⊄ accounts`; conta de `accounts`/`pool`
+sem token registrado.
+Avisos: contas duplicadas dentro do mesmo `pool` (contam como uma); mux com `pool` não vazio cuja
+preferida está fora do `pool` (ele nunca sai dela sozinho: o `sb` avisa, como você decidiu, mas é
+fácil ser engano); sessões estranhas (legado `~/.claude/contas/`); `watch` parado.
 `--fix`: recria links, corrige permissões, adota sessões sem settings (pelo root).
 
 ## 10. Migração do `claude-conta` (`sb migrate`) **[usuário: "depois vamos trocar todo nosso lance por ela"]**
 
 Com `--simular` primeiro, mostrando tudo o que faria:
 1. Importar `~/.claude/contas/<nome>.json` (exceto `ativa.json`; `padrao.json` = keychain) para
-   `tokens/`; prioridade inicial: a conta ativa primeiro, depois ordem alfabética, todas no pool
+   `tokens/`; cada mux importado recebe `accounts` = todas as importadas e `pool` = a conta ativa primeiro, depois ordem alfabética (o mux do keychain: `pool` vazio)
    **[minha escolha]**; sinalizar duplicatas (F3).
-2. Criar muxes: um por raiz de `~/.claude/contas/excluir` (conta keychain, `swap: false`) e um por
+2. Criar muxes: um por raiz de `~/.claude/contas/excluir` (conta keychain, `pool: []`) e um por
    view `claude agents --cwd` aberta (conta = a ativa atual).
 3. Reescrever `respawnFlags` das sessões em segundo plano **paradas**: `~/.claude/contas/ativa.json`
    → `mux/<mux pela pasta>.json`; `~/.claude/contas-fixas/<c>.json` → `pins/<c>.json`. Vivas: na
