@@ -167,6 +167,9 @@ desejada(mux) =
 A ordem do `pool` é **do mux**: a mesma conta pode ser a 1ª na fila de um mux e a 2ª na de outro,
 e pode estar no pool de vários muxes ao mesmo tempo (cada mux anda na própria fila) **[minha escolha]**.
 
+- **Medição `unknown` (falha da nossa sonda: rede, 5xx) nunca, sozinha, faz o mux sair de uma conta que ainda é um lugar válido** [minha escolha, 03/11]: parar sessões por causa de um erro nosso custaria duas paradas por mux. `rate-limited` (429), token morto e esgotamento medido, sim, contam como esgotada.
+- **Nunca ficar numa conta esgotada ou morta com a preferida utilizável**: a histerese do retorno segura uma reserva ainda boa, não uma esgotada [minha escolha, 03/11].
+- **Override manual esgotado** volta à regra normal ("segue a fila normal": a preferida volta a valer) [minha escolha, 03/11].
 - Isso dá o **retorno no reset** de graça: quando a preferida volta a estar disponível, ela é a
   desejada outra vez **[usuário: "o ideal é pegar sempre ao resetar"]**.
 - Um mux numa conta reserva (fora do preferido) que também esgota vai para a próxima da fila.

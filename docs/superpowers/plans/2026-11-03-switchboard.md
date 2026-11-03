@@ -480,23 +480,28 @@ test('usage.json não contém token', ...)
 
 `availability`: sem medição → `unknown`; `no-token`/`dead-token` → `exhausted`; **`rate-limited` → `exhausted`** (ruling do controlador após a revisão da Task 8: um 429 da sonda, mesmo sem cabeçalhos legíveis, é o sinal de conta esgotada; não há reset conhecido, então vale até a próxima medição `ok` e a histerese do retorno não se aplica); outros erros (`network`, `unexpected`) → `unknown`. Com margem `m = returning ? HYSTERESIS : 0`: janela esgotada se `utilization ≥ limite − m` **ou** `status` não começa com `allowed`; esgotada **e** `nowMs/1000 < resetsAt` → `exhausted`; o `status` geral `rejected` com `resetsAt` futuro → `exhausted`; senão `available`.
 
-`desiredAccount`, nesta ordem (algoritmo, não deduzível dos testes):
+`desiredAccount` (algoritmo revisto após a revisão da Task 10 — controlador; `stay(c)` = `c ∈ mux.accounts ∧ availability(c) ≠ 'exhausted'`, ou seja uma medição `unknown` é falha NOSSA e nunca, sozinha, faz o mux sair de um lugar válido):
 ```
 1. pool vazio                                   → current            'no-pool'
-2. override ativo (nowMs < until):
-     availability(override.account) == available → override.account  'override'
-     senão vá para 5 tratando a preferida como esgotada
-3. sem override e availability(pref, returning: current ≠ pref) ≠ exhausted   (unknown conta como ok):
-     se !returnOnReset e current ≠ pref e current ∈ pool e availability(current) == available
-                                                → current            'sticky'
-     senão                                      → pref               'preferred'
+2. override ativo (nowMs < until, ms):
+     availability(override.account) == available            → override.account  'override'
+     == unknown e current == override.account               → current           'override'
+     senão (esgotada, ou unknown e current ≠ override)      → segue para 3 com o override anulado ("fila normal": a preferida volta a valer)
+3. pref: R = current ≠ pref ∧ current ∈ accounts ∧ current ∉ groupOf(pref)   (é "reserva" → histerese de retorno; current ∉ accounts ou duplicata da pref não é reserva)
+   pa = availability(pref, { returning: R })
+   current == pref ou duplicata de pref: pa ≠ exhausted → current/pref 'preferred'
+   current ≠ pref (reserva ou fora de accounts):
+     pa == available → se !returnOnReset ∧ current ∈ pool ∧ availability(current) == available → current 'sticky', senão pref 'preferred'
+     pa == unknown   → se stay(current) → current 'sticky' (não há evidência para sair); senão pref 'preferred'
+     pa == exhausted → segue
 4. pref ∉ pool                                  → pref               'preferred-outside-pool' (warn)
-5. se `current` já é um destino válido (current ∈ pool, ≠ pref, ∉ groupOf(pref), availability(current) == available, sem histerese)
+5. se current ∈ pool ∧ current ≠ pref ∧ current ∉ groupOf(pref) ∧ availability(current) ≠ 'exhausted' (available OU unknown, sem histerese)
                                                 → current            'pool'  (fica: trocar custa parar sessões; a ordem do pool escolhe destino, não faz saltar entre reservas)
-   senão a 1ª conta c do pool, na ordem, com c ∉ groupOf(pref), sem repetir grupo já visto,
-   availability(c) == available                 → c                  'pool'
-6. nenhuma                                      → current (ou pref, se current ∉ mux.accounts)  'none-available' (warn)
+   senão a 1ª conta c do pool, na ordem, com c ∉ groupOf(pref), sem repetir grupo já visto, availability(c) == available → c 'pool'  (destino: só `available`, sem histerese)
+5b. se availability(pref, { returning: false }) == available   → pref  'preferred'   (nunca ficar numa conta esgotada/morta com a preferida utilizável: a histerese segura uma reserva usável, não uma esgotada)
+6. nenhuma                                      → current (ou pref, se current ∉ mux.accounts)  'none-available' (warn: texto correto para o caso — "permanece em X" só quando desired == current)
 ```
+`override.until` é em MILISSEGUNDOS (compara com `nowMs`; o `sb swap` guarda `fiveHour.resetsAt * 1000`). Teste de ponto fixo: iterar `desiredAccount` realimentando `current` converge em ≤ 2 passos e nunca forma ciclo de 2 (varredura aleatória de milhares de cenários).
 
 - [ ] **Step 1: Testes que falham** (`NOW` fixo; `mk(u5, u7, opts?)` cria `Measurement` ok com resets em `NOW/1000 + 3600`)
 
