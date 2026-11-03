@@ -158,4 +158,81 @@ Limpeza: as três cópias e `ff1b8a7b` foram paradas e removidas (`claude stop` 
 
 ## §3 Trabalho agendado
 
-A preencher na Task 3.
+Experimento de 03/11/2026 12:45-13:00 (-03), claude 2.1.317, tudo via `cl`, haiku, `--settings ~/.claude/contas/ativa.json`,
+uma sessão por mecanismo, cada uma em `mktemp -d /tmp/sb-spike-XXXX` próprio (diálogo de confiança aceito por pty, como no §2).
+**n = 1 por mecanismo** (uma sessão, um ciclo de stop+respawn): tudo abaixo é "na sessão testada". Horários em -03 (o
+`state.json`/transcrição usam UTC, +3 h).
+
+| nome | id | prompt | o que o modelo fez |
+|---|---|---|---|
+| `sb-spike-loop` | `6a471e1e` | `/loop 2m responda só: tick` | criou o cron `91abbe20` (recorrente, 2 min) |
+| `sb-spike-wakeup` | `63531985` | `/loop responda só: tick (acorde de novo em 2 minutos)` | modo dinâmico: ScheduleWakeup encadeado (toolUseId em `.pending-wakeup`); as batidas reais saíram a cada ~3 min (12:48:04, 12:51:06), não 2 |
+| `sb-spike-monitor` | `ecbef04b` | Monitor em `while true; do date; sleep 30; done` | monitor `bm9r66c92` |
+| `sb-spike-cron` | `4911b558` | CronCreate daqui a 5 min | one-shot `553e211c`, disparou às 12:50:00 |
+| `sb-spike-cron` (2a) | `d3da7efb` | CronCreate daqui a **7** min | one-shot `fbcb9825` para 12:58; criada só para o teste de stop+respawn (a 1a já tinha disparado quando chegou a hora de parar) |
+
+Todos os textos de `detail`/timeline abaixo (ex.: "possible duplicate cycle", "3 cycles in parallel", "next run 12:47" depois de
+12:54) são **escritos pelo modelo haiku** e erram; nenhum fato foi tirado deles. A saída do CronCreate "só existe nesta
+sessão e não roda se ela encerrar antes" também é afirmação do modelo, e foi **contrariada** pelo teste de respawn (abaixo).
+
+### Entre ticks e durante um tick (campos do `state.json` / `agents --json --all`)
+
+Colunas: `ag` = `agents.state`/`agents.status`; `job` = `state.json` `state`/`tempo`; `inFlight` = `tasks`, `queued`, `kinds`.
+
+| mecanismo | entre ticks: `ag`, `job` | entre ticks: `inFlight` + chaves extras | durante um tick |
+|---|---|---|---|
+| `/loop 2m` (cron recorrente) | `working`/`idle`; `working`/`idle` | `tasks 1`, `queued 0`, `kinds ["session_cron"]`, `drainableMonitors 0`; chave nova `selfWake: true` | `busy`/`active` por ~3-6 s (12:50:37-41, 12:56:35-41); `inFlight` **igual** (continua `session_cron`) |
+| ScheduleWakeup (`/loop` sem intervalo) | `working`/`idle`; `working`/`idle` | `tasks 1`, `kinds ["session_cron"]` **e** `inFlight.wake = {at (ms epoch), reason, fires}`; arquivo `~/.claude/jobs/<id>/.pending-wakeup` `{toolUseId, scheduledFor, chainStartedAt}`. `selfWake`: ausente na 1a leitura (12:45:31), `true` nas leituras de 12:51:00 e pré-stop | `busy`/`active`; `fires` sobe 0→1→2. Em 12:51:00 (meio do tick) `kinds []`, `tasks 0`, sem `wake`, sem `.pending-wakeup`: sem marcador por ~7 s até o modelo reagendar (12:51:07). Em 12:48:05 o `wake` já estava com o `at` novo |
+| Monitor | `working`/`busy` (ou `done`/`busy`); `job.state` alterna `working`/`done`, `tempo` `idle`/`active` | `tasks 1`, `kinds ["monitor"]`, `drainableMonitors 0`; chave nova `fan: [{id, kind:"monitor", label, startedAt}]`; sem `selfWake`. `~/.claude/sessions/<pid>.json` mostra `status: "shell"` | cada linha de saída do monitor (a cada 30 s) acorda o modelo: `tempo active` por ~6 s (12:47:21, :47:52, :48:23, :49:22, :49:54…), com `ag.status` `busy` o tempo todo, inclusive entre eles |
+| CronCreate one-shot | `working`/`idle` (às vezes `done`/`idle`); `job.state` `done`/`idle` | `tasks 1`, `kinds ["session_cron"]`, `selfWake: true`; sem `wake`/`fan` | no disparo (12:50:00) `busy`/`active` e `tasks 0`, `kinds []` já de início (consumido); depois `done`/`idle`, sem `selfWake`. Fica indistinguível de uma sessão ociosa comum |
+
+Fatos transversais, todos observados:
+
+- `drainableMonitors` ficou **0** o tempo todo, inclusive com um Monitor vivo. Não é marcador. O marcador do Monitor é `kinds ∋ "monitor"`.
+- `queued` ficou **0** em todos os casos. `status` `idle` entre ticks (loop, wakeup, cron): "idle" não prova que a sessão está livre de agendamento. No Monitor o `status` é `busy` entre ticks: "busy" não prova turno em andamento.
+- `agents.state` e `job.state` divergiram no mesmo instante (ex.: 12:46:04 monitor `ag done`/`job done`, cron `ag working`/`job done`; 12:50:00 cron `ag working/busy`/`job done/active`): para decidir, usar `job.state`/`inFlight`, não `agents.state`.
+- Nenhum arquivo agendado novo apareceu em `~/.claude` (`find` até profundidade 4) fora de `projects/` e dos diretórios `jobs/<id>/` (`state.json`, `timeline.jsonl`; mais `.pending-wakeup` só no wakeup), `sessions/<pid>.json` e `daemon/roster.json`.
+  Em `<cwd>/.claude/` só um `scheduled_tasks.lock` `{sessionId, pid, procStart, acquiredAt}` (nos diretórios loop e cron; no monitor não havia `.claude`; no wakeup a pasta ficou sem arquivos); no do cron o lock era da **1a** sessão (`4911b558`), e mesmo assim a 2a (`d3da7efb`, mesmo cwd) disparou. Nenhum `scheduled_tasks.json` apareceu.
+- Os ids dos crons (`91abbe20`, `553e211c`, `fbcb9825`) aparecem na transcrição `~/.claude/projects/<cwd>/<sessionId>.jsonl` (15, 5 e 5 ocorrências). Que a restauração depois do respawn venha da transcrição é **inferência**: o mecanismo de restauração não foi observado.
+- Os ticks do loop e o disparo do cron aparecem na transcrição como `system`/`scheduled_task_fire` seguido do prompt de usuário (`responda só: tick`, `responda só: oi`).
+
+### Depois de `stop` + `respawn` (parados 12:52:07, respawn 12:53:04, observados até 12:59:58)
+
+`respawn` imprimiu "respawned" nos quatro e todos ganharam pid; o julgamento abaixo é por `agents`/`state.json`/transcrição.
+
+| mecanismo | em `stop` | depois do respawn |
+|---|---|---|
+| `/loop 2m` | `state` `stopped`; `inFlight`, `selfWake` somem; `lastTerminalAt` aparece | **volta**: `kinds ["session_cron"]` em até 4 s; mesmo cron `91abbe20`; ticks reais (`scheduled_task_fire`) às 12:54:35, 12:56:34, 12:58:34. O tick de 12:52:37 (parada) **não foi reposto** |
+| ScheduleWakeup | idem; `.pending-wakeup` apagado | **perdido**: `kinds []`, sem `wake`, sem `.pending-wakeup`; o disparo agendado para 12:54:00 não ocorreu e nada ocorreu até 13:00 (parada final). Cadeia encerrada |
+| Monitor | idem, mas **`fan` continua** no `state.json` | **perdido**: transcrição recebeu `<task-notification> … status stopped` às 12:53:07; `kinds []` depois; `fan` ainda listava o monitor (obsoleto). Nenhum tick novo |
+| CronCreate one-shot (`d3da7efb`) | **anomalia**: `state.json` **não foi reescrito** (`state` `done`, `inFlight.kinds ["session_cron"]`, `selfWake true`), `agents`: `state working`, `status` nulo, sem pid, por ≥ 25 s (12:52:14 e 12:52:25). Nos outros três o `stop` reescreveu | **disparou às 12:58:00** (`scheduled_task_fire` + `oi`), apesar de ter parado e reaberto antes. **Mas** entre 12:53:08 e 12:58:02 o `state.json` mostrou `kinds []`, `tasks 0`, `job.state done`: o agendamento estava vivo e **invisível** |
+
+Detalhes do respawn: `job.state` passou a `running` (valor novo, não visto antes) em loop, wakeup e monitor (o loop voltou a `working` no primeiro tick; wakeup e monitor ficaram em `running`); `inFlight` ganhou forma sem a chave
+`drainableMonitors` (`{tasks, queued, kinds}`), que voltou no loop depois do primeiro tick. O parser tem de tolerar chave ausente.
+
+### Regra proposta para `hasScheduledWork` (PROVISÓRIA)
+
+Proposta, baseada em n = 1 por mecanismo; não é fato estabelecido:
+
+```
+hasScheduledWork(job, agent) =
+  agent.hasPid                                  // sem pid o state.json pode mentir (anomalia do stop acima)
+  && job.inFlight != null
+  && ( job.inFlight.kinds ∋ "session_cron"      // /loop, ScheduleWakeup e CronCreate vivos
+       || job.inFlight.kinds ∋ "monitor"        // Monitor vivo
+       || job.inFlight.wake != null )           // ScheduleWakeup pendente
+```
+
+- Dica secundária (não decide sozinha): `selfWake == true`. Não usar: `status`, `queued`, `drainableMonitors`, `tasks > 0` (também vale para `local_bash`/`local_agent`, trabalho dentro do turno), `fan` (obsoleto depois do stop), nem `detail`/timeline (texto do modelo).
+- O que um `stop` faz com cada um (na sessão testada): mata ScheduleWakeup e Monitor; loop recorrente e CronCreate one-shot reapareceram após `respawn`; ticks perdidos durante a parada não são repostos.
+- Limitações conhecidas da regra: (1) falso negativo após `respawn` de um one-shot cron pendente (`kinds []` até disparar); (2) janela de ~7 s no ScheduleWakeup, no meio do tick (`kinds []`): reler com 2 amostras ou olhar também `.pending-wakeup`; (3) falso positivo sem a condição de pid, pelo `state.json` obsoleto de sessão `done` parada.
+
+### Não testado / não observado
+
+- CronCreate com `durable: true` e onde ele grava; mais de um cron na mesma sessão; cron recorrente criado por CronCreate (só `/loop` foi recorrente).
+- Trabalho agendado em sessão presa por limite (§1) e o que o reset faz com ele.
+- `claude attach` e `respawn` de sessão que não está parada; respawn depois de o horário do cron já ter passado (o one-shot foi respawnado antes da hora).
+- ScheduleWakeup: o único caso feito foi `stop` 12:52, respawn 12:53, `scheduledFor` 12:54 (respawn **antes** da hora; a cadeia se perdeu). Respawn **depois** da hora: não feito.
+- ScheduleWakeup chamado fora de `/loop`: só o modo dinâmico do `/loop` foi exercitado.
+
+Limpeza: as 5 sessões (`6a471e1e`, `63531985`, `ecbef04b`, `4911b558`, `d3da7efb`) paradas e removidas (`stop` + `rm`); `agents --json --all | grep -c sb-spike` = 0 e nenhum dos 5 ids na lista; os 4 diretórios de teste passaram por `cl purge -y` e foram removidos de `/tmp`; nenhuma chave `sb-spike` em `projects` de `~/.claude.json`.
