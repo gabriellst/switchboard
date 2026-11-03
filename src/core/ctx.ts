@@ -58,7 +58,13 @@ export function defaultCtx(env: Record<string, string | undefined> = process.env
     paths,
     env,
     now,
-    fetch: (url, init) => globalThis.fetch(url, init),
+    // A sonda só lê status e cabeçalhos: o corpo é descartado na hora, senão cada sonda do `watch`
+    // deixa uma conexão/stream pendurado até o GC.
+    fetch: async (url, init) => {
+      const res = await globalThis.fetch(url, init)
+      await res.body?.cancel().catch(() => undefined)
+      return { status: res.status, headers: res.headers }
+    },
     run,
     notify(title, msg) {
       if (env.SWITCHBOARD_NO_NOTIFY) return

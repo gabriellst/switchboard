@@ -35,3 +35,34 @@ test('run captura status/stdout/stderr e não repassa token herdado por padrão'
   expect(r).toEqual({ status: 3, stdout: '[||1]\n', stderr: 'err\n' })
   expect(ctx.run('definitely-not-a-binary-xyz', []).status).toBeNull()
 })
+
+test('fetch real libera o corpo da resposta (sondas repetidas do watch não acumulam conexões)', async () => {
+  let cancelled = false
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch() {
+      // corpo que nunca termina: só acaba se o cliente o descartar
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new TextEncoder().encode('x'))
+        },
+        cancel() {
+          cancelled = true
+        },
+      })
+      return new Response(body, { status: 429, headers: { 'x-probe': 'sim' } })
+    },
+  })
+  try {
+    const ctx = defaultCtx(sandbox().env)
+    const res = await ctx.fetch(`http://127.0.0.1:${server.port}/`, { method: 'POST', headers: {}, body: '{}' })
+    expect(res.status).toBe(429)
+    expect(res.headers.get('x-probe')).toBe('sim') // cabeçalhos continuam legíveis depois de liberar o corpo
+    const deadline = Date.now() + 3000
+    while (!cancelled && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20))
+    expect(cancelled).toBe(true)
+  } finally {
+    void server.stop(true)
+  }
+})
