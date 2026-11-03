@@ -62,11 +62,12 @@ export interface MuxEval {
  * 3. preferida: `R` = current ≠ pref, current ∈ accounts e current ∉ groupOf(pref) ("reserva": só ela
  *    tem histerese no retorno; duplicata da preferida ou current fora de accounts não é reserva).
  *    `pa = availability(pref, { returning: R })`.
- *    - current == pref ou duplicata dela: `pa ≠ exhausted` → fica ('preferred');
- *    - senão: pa available → (`!returnOnReset` e current ∈ pool e available) 'sticky', senão pref;
+ *    - current == pref ou duplicata dela que esteja em mux.accounts: `pa ≠ exhausted` → fica ('preferred');
+ *    - senão: pa available → (`!returnOnReset` e current ∈ pool e `stay(current)`: unknown também fica) 'sticky', senão pref;
  *             pa unknown   → `stay(current)` ? current 'sticky' (sem evidência para sair) : pref;
  *             pa exhausted → segue.
- * 4. preferida esgotada e fora do pool → fica nela, com aviso.
+ * 4. preferida esgotada e fora do pool, e current é a preferida (ou duplicata dela em accounts) → fica,
+ *    com aviso. Se current é OUTRA conta, pula para o passo 5 (a preferida fora do pool não é destino).
  * 5. `current` se já é destino válido (∈ pool, ≠ pref, ∉ groupOf(pref), `availability ≠ exhausted`:
  *    available OU unknown, sem histerese) → fica ('pool'; trocar custa parar sessões, e a ordem do
  *    pool escolhe destino, não faz saltar entre reservas). Senão a 1ª conta do pool, na ordem, fora do
@@ -113,23 +114,27 @@ export function desiredAccount(input: {
   }
 
   const prefGroup = groupOf(usage, pref)
-  const prefLike = current === pref || prefGroup.includes(current)
+  // "é a preferida": ela mesma, ou uma duplicata dela que esteja em mux.accounts (duplicata fora de
+  // accounts não conta como lugar onde ficar: cai nas regras gerais e vai para a preferida)
+  const prefLike = current === pref || (prefGroup.includes(current) && mux.accounts.includes(current))
   const reserve = !prefLike && mux.accounts.includes(current)
   const pa = avail(pref, reserve)
   if (prefLike) {
     if (pa !== 'exhausted') return done(current, 'preferred')
   } else if (pa === 'available') {
-    const sticky = !swap.returnOnReset && pool.includes(current) && avail(current) === 'available'
+    const sticky = !swap.returnOnReset && pool.includes(current) && stay(current)
     return sticky ? done(current, 'sticky') : done(pref, 'preferred')
   } else if (pa === 'unknown') {
     return stay(current) ? done(current, 'sticky') : done(pref, 'preferred')
   }
 
-  if (!pool.includes(pref)) {
+  // Preferida esgotada e fora do pool: só "fica parada nela" quem JÁ está nela (ou numa duplicata dela).
+  // Quem está em OUTRA conta segue para o passo 5: a preferida fora do pool não é destino de troca.
+  if (!pool.includes(pref) && prefLike) {
     return done(
-      pref,
+      current,
       'preferred-outside-pool',
-      `Mux "${name}": a conta preferida "${pref}" está esgotada e fora do pool; não há troca possível, permanece nela.`,
+      `Mux "${name}": a conta preferida "${pref}" está esgotada e fora do pool; não há troca possível, permanece em "${current}".`,
     )
   }
 

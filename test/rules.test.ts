@@ -338,9 +338,17 @@ describe('desiredAccount', () => {
       const r = eval_({ gabriel: mk(0.1, 0.1), 'cliente-x': mk(0.1, 0.1) }, { current: 'cliente-x', returnOnReset: false })
       expect(r).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
     })
-    test('atual sem medição (unknown) não é sticky', () => {
+    // FLIPPED (fix round 2): sticky usa stay(current): unknown (falha nossa) também fica
+    test('atual sem medição (unknown) também é sticky', () => {
       const r = eval_({ gabriel: mk(0.1, 0.1) }, { current: 'admin1', returnOnReset: false })
-      expect(r).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
+      expect(r).toMatchObject({ desired: 'admin1', reason: 'sticky' })
+    })
+    test('atual com erro de rede (unknown) também é sticky; disponível, idem', () => {
+      expect(eval_({ gabriel: mk(0.1, 0.1), admin1: err('network') }, { current: 'admin1', returnOnReset: false })).toMatchObject({ desired: 'admin1', reason: 'sticky' })
+      expect(eval_({ gabriel: mk(0.1, 0.1), admin1: mk(0.2, 0.2) }, { current: 'admin1', returnOnReset: false })).toMatchObject({ desired: 'admin1', reason: 'sticky' })
+    })
+    test('atual esgotada ou morta não é sticky', () => {
+      expect(eval_({ gabriel: mk(0.1, 0.1), admin1: err('dead-token') }, { current: 'admin1', returnOnReset: false })).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
     })
     test('já na preferida → preferida', () => {
       const r = eval_({ gabriel: mk(0.1, 0.1) }, { current: 'gabriel', returnOnReset: false })
@@ -453,5 +461,39 @@ describe('desiredAccount — ponto fixo (varredura aleatória com semente)', () 
       expect(d3, ctx).toBe(d2) // ponto fixo em ≤ 2 iterações
       expect(d2, ctx).toBe(d1) // na verdade em 1: depois de mover, ficar; logo nunca há ciclo de 2
     }
+  })
+})
+
+describe('desiredAccount — fix round 2 (step 3 sticky, step 4, duplicata fora do registro)', () => {
+  test('step 4: preferida fora do pool e esgotada, atual é OUTRA conta → vai para o pool, não para a preferida', () => {
+    const r = eval_(
+      { gabriel: mk(0.95, 0.1), 'cliente-x': mk(0.95, 0.1), admin1: mk(0.2, 0.2) },
+      { mux: { pool: ['admin1'] }, current: 'cliente-x', override: { account: 'cliente-x', until: NOW + 60_000 } },
+    )
+    expect(r).toMatchObject({ desired: 'admin1', reason: 'pool' })
+    expect(r.warn).toBeUndefined()
+  })
+  test('step 4: atual é a preferida → fica com aviso "permanece" (desired == current)', () => {
+    const r = eval_({ gabriel: mk(0.95, 0.1), admin1: mk(0.2, 0.2) }, { mux: { pool: ['admin1'] }, current: 'gabriel' })
+    expect(r).toMatchObject({ desired: 'gabriel', reason: 'preferred-outside-pool' })
+    expect(r.warn).toContain('permanece em "gabriel"')
+  })
+  test('step 4: atual é duplicata da preferida em accounts → fica nela (preferred-outside-pool)', () => {
+    const mux = { pool: ['admin1'], accounts: ['gabriel', 'zz', 'admin1'] }
+    const r = eval_({ gabriel: mk(0.95, 0.1), zz: mk(0.95, 0.1), admin1: mk(0.95, 0.2) }, { mux, current: 'zz', groups: [['gabriel', 'zz']] })
+    expect(r).toMatchObject({ desired: 'zz', reason: 'preferred-outside-pool' })
+    expect(r.warn).toContain('permanece em "zz"')
+  })
+  test('step 4 pulado e nada disponível → none-available mantém a atual (aviso coerente)', () => {
+    const r = eval_(
+      { gabriel: mk(0.95, 0.1), 'cliente-x': mk(0.95, 0.1), admin1: mk(0.95, 0.2) },
+      { mux: { pool: ['admin1'] }, current: 'cliente-x' },
+    )
+    expect(r).toMatchObject({ desired: 'cliente-x', reason: 'none-available' })
+    expect(r.warn).toContain('permanece em "cliente-x"')
+  })
+  test('duplicata da preferida FORA de mux.accounts não "fica": vai para a preferida', () => {
+    const r = eval_({ gabriel: mk(0.1, 0.1), zz: mk(0.1, 0.1) }, { current: 'zz', groups: [['gabriel', 'zz']] })
+    expect(r).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
   })
 })
