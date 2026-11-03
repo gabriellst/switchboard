@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse as parseJsonc } from 'jsonc-parser'
 import { editConfig, ensureConfig, InvalidConfigError, loadConfig, parseConfig, parseDuration } from '../src/core/config.js'
 import { EXIT, SbError } from '../src/core/errors.js'
+import { withLock } from '../src/core/fsx.js'
 import { z } from 'zod'
 import { Config } from '../src/core/schema.js'
 import { sandbox } from './helpers.js'
@@ -357,4 +358,33 @@ test('schema.json commitado é o que scripts/gen-schema.ts gera (não fica obsol
   const generated = { title: 'switchboard config', ...z.toJSONSchema(Config, { target: 'draft-7', io: 'input' }) }
   const committed = JSON.parse(readFileSync(join(import.meta.dir, '..', 'schema.json'), 'utf8')) as unknown
   expect(committed).toEqual(JSON.parse(JSON.stringify(generated)))
+})
+
+test('editConfig concorrente sob withLock não perde atualização', async () => {
+  const sb = sandbox()
+  mkdirSync(join(sb.paths.configFile, '..'), { recursive: true })
+  writeFileSync(sb.paths.configFile, DESIGN_EXAMPLE)
+  await Promise.all(
+    ['n1', 'n2', 'n3', 'n4', 'n5'].map((name) => withLock(sb.paths, () => editConfig(sb.paths, [{ path: ['accounts', name], value: {} }]))),
+  )
+  const accounts = Object.keys(parseJsonc(readFileSync(sb.paths.configFile, 'utf8')).accounts)
+  expect(accounts).toEqual(expect.arrayContaining(['n1', 'n2', 'n3', 'n4', 'n5', 'gabriel']))
+  expect(readdirSync(join(sb.paths.configFile, '..'))).toEqual(['config.jsonc'])
+})
+
+test('editConfig com config symlink (dotfiles) grava no alvo e mantém o link e o modo', async () => {
+  const sb = sandbox()
+  const real = join(sb.dir, 'dotfiles', 'config.jsonc')
+  mkdirSync(join(sb.dir, 'dotfiles'), { recursive: true })
+  mkdirSync(join(sb.paths.configFile, '..'), { recursive: true })
+  writeFileSync(real, DESIGN_EXAMPLE, { mode: 0o640 })
+  chmodSync(real, 0o640)
+  symlinkSync(real, sb.paths.configFile)
+  await editConfig(sb.paths, [{ path: ['accounts', 'nova'], value: {} }])
+  expect(lstatSync(sb.paths.configFile).isSymbolicLink()).toBe(true)
+  expect(readlinkSync(sb.paths.configFile)).toBe(real)
+  expect(parseJsonc(readFileSync(real, 'utf8')).accounts.nova).toEqual({})
+  expect(statSync(real).mode & 0o777).toBe(0o640)
+  expect(readdirSync(join(sb.dir, 'dotfiles'))).toEqual(['config.jsonc'])
+  expect(readdirSync(join(sb.paths.configFile, '..'))).toEqual(['config.jsonc'])
 })

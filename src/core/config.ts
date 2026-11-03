@@ -1,10 +1,11 @@
-import { existsSync } from 'node:fs'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { existsSync, statSync } from 'node:fs'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyEdits, modify, parse as parseJsonc, parseTree, printParseErrorCode, type Node, type ParseError } from 'jsonc-parser'
 import type { $ZodIssue } from 'zod/v4/core'
 import { EXIT, SbError } from './errors.js'
+import { writeAtomic } from './fsx.js'
 import type { Paths } from './paths.js'
 import { makeConfig, type Config } from './schema.js'
 
@@ -137,22 +138,26 @@ export interface ConfigEdit {
 
 /**
  * Edita o texto com `jsonc-parser` (comentários e formatação ficam), valida o resultado inteiro
- * e só então grava (arquivo temporário + rename). Inválido → lança e o arquivo fica como estava.
+ * e só então grava com `writeAtomic` (temporário + rename; config symlink grava no alvo e o modo se mantém).
+ * Inválido → lança e o arquivo fica como estava. Não toma lock: quem chama envolve em `withLock`
+ * (o ler-editar-gravar inteiro), senão duas edições concorrentes podem perder uma atualização.
  */
+/** Modo atual do arquivo (segue symlink); 644 se não der para ler. */
+function configMode(file: string): number {
+  try {
+    return statSync(file).mode & 0o777
+  } catch {
+    return 0o644
+  }
+}
+
 export async function editConfig(paths: Paths, edits: ConfigEdit[]): Promise<Config> {
   let text = await readConfigText(paths)
   for (const e of edits) {
     text = applyEdits(text, modify(text, e.path, e.value, { formattingOptions: { insertSpaces: true, tabSize: 2, eol: '\n' } }))
   }
   const config = parseConfig(text, paths.configFile, paths.home)
-  const tmp = `${paths.configFile}.${process.pid}.tmp`
-  try {
-    await writeFile(tmp, text)
-    await rename(tmp, paths.configFile)
-  } catch (e) {
-    await rm(tmp, { force: true })
-    throw e
-  }
+  writeAtomic(paths.configFile, text, configMode(paths.configFile))
   return config
 }
 

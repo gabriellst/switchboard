@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
-import { backupDir, lockFile, logFile, muxLink, pinLink, resolvePaths, runtimeFile, tokenFile, usageFile } from '../src/core/paths.js'
+import { EXIT, SbError } from '../src/core/errors.js'
+import { assertSafeName, backupDir, lockFile, logFile, muxLink, pinLink, resolvePaths, runtimeFile, tokenFile, usageFile } from '../src/core/paths.js'
 
 test('padrões a partir do HOME', () => {
   const p = resolvePaths({ HOME: '/h' })
@@ -41,4 +42,26 @@ test('caminhos derivados do estado', () => {
   expect(logFile(p, 'watch')).toBe('/st/log/watch.log')
   expect(logFile(p, 'login')).toBe('/st/log/login.log')
   expect(backupDir(p, '20261103-101500')).toBe('/st/backup/20261103-101500')
+})
+
+test('assertSafeName: nome inválido → exit 3; válidos passam', () => {
+  const p = resolvePaths({ HOME: '/h', SWITCHBOARD_STATE_DIR: '/st' })
+  const bad = ['../x', 'a/b', '', 'A', 'x'.repeat(33), '-a', '_a', 'a.b', 'a b', '..', 'a\u0000b']
+  for (const name of bad) {
+    for (const fn of [() => assertSafeName(name), () => tokenFile(p, name), () => muxLink(p, name), () => pinLink(p, name)]) {
+      let err: unknown
+      try {
+        fn()
+      } catch (e) {
+        err = e
+      }
+      expect(err).toBeInstanceOf(SbError)
+      expect((err as SbError).exit).toBe(EXIT.USAGE)
+      expect((err as SbError).message).toMatch(/nome/)
+    }
+  }
+  for (const ok of ['admin1', 'keychain', 'a_b-c', 'a', '0x', 'x'.repeat(32)]) {
+    expect(assertSafeName(ok)).toBe(ok)
+    expect(tokenFile(p, ok)).toBe(`/st/tokens/${ok}.json`)
+  }
 })

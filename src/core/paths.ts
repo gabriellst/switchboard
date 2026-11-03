@@ -31,9 +31,22 @@ export function resolvePaths(env: Env): Paths {
   }
 }
 
-export const tokenFile = (p: Paths, account: string): string => join(p.stateDir, 'tokens', `${account}.json`)
-export const muxLink = (p: Paths, mux: string): string => join(p.stateDir, 'mux', `${mux}.json`)
-export const pinLink = (p: Paths, account: string): string => join(p.stateDir, 'pins', `${account}.json`)
+const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/
+
+/**
+ * Defesa em profundidade: nome de conta/mux vira nome de arquivo, então `../x` ou `a/b` não pode
+ * chegar ao `join`. A config e a CLI já validam; aqui é a última barreira (`keychain` é um nome válido).
+ */
+export function assertSafeName(name: string): string {
+  if (!NAME_RE.test(name)) {
+    throw new SbError(`nome inválido: ${JSON.stringify(name)} — use minúsculas, números, - e _ (até 32, começando por letra ou número)`, EXIT.USAGE)
+  }
+  return name
+}
+
+export const tokenFile = (p: Paths, account: string): string => join(p.stateDir, 'tokens', `${assertSafeName(account)}.json`)
+export const muxLink = (p: Paths, mux: string): string => join(p.stateDir, 'mux', `${assertSafeName(mux)}.json`)
+export const pinLink = (p: Paths, account: string): string => join(p.stateDir, 'pins', `${assertSafeName(account)}.json`)
 export const usageFile = (p: Paths): string => join(p.stateDir, 'usage.json')
 export const runtimeFile = (p: Paths): string => join(p.stateDir, 'runtime.json')
 export const lockFile = (p: Paths): string => join(p.stateDir, 'lock')

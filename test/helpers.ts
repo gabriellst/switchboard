@@ -19,6 +19,8 @@ export interface Sandbox {
   paths: Paths
   ctx(over?: Partial<Ctx>): Ctx
   runSb(args: string[], opts?: { env?: Record<string, string>; cwd?: string; input?: string }): { code: number; stdout: string; stderr: string }
+  /** Grava `tokens/<conta>.json` (600) direto, sem passar pelo código sob teste. */
+  addToken(account: string, token?: string): void
   calls(): FakeCall[]
 }
 
@@ -69,6 +71,12 @@ export function sandbox(): Sandbox {
         encoding: 'utf8',
       })
       return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }
+    },
+    addToken(account, token = FAKE_TOKEN) {
+      const file = tokenFile(resolvePaths(env), account)
+      mkdirSync(join(file, '..'), { recursive: true, mode: 0o700 })
+      writeFileSync(file, JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: token } }), { mode: 0o600 })
+      chmodSync(file, 0o600)
     },
     calls() {
       try {
