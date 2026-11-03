@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { defineCommand, runMain } from 'citty'
+import { defineCommand, runCommand, runMain } from 'citty'
 import { usageArgs } from './commands/args.js'
 import { EXIT, SbError } from './core/errors.js'
 
@@ -18,10 +18,23 @@ const main = defineCommand({
     attach: () => import('./commands/attach.js').then((m) => m.default),
     detach: () => import('./commands/detach.js').then((m) => m.default),
     which: () => import('./commands/which.js').then((m) => m.default),
+    agents: () => import('./commands/agents.js').then((m) => m.default),
+    run: () => import('./commands/run.js').then((m) => m.default),
   },
 })
 
-runMain(main).catch((e: unknown) => {
+/**
+ * O `runMain` do citty mostra a ajuda se `--help`/`-h` aparece EM QUALQUER lugar. Em `sb run … -- --help` isso
+ * é do `claude`: sem ajuda do `sb` antes do `--`, vai direto ao comando.
+ */
+function passthroughRun(raw: string[]): boolean {
+  const dd = raw.indexOf('--')
+  return raw[0] === 'run' && dd !== -1 && !raw.slice(0, dd).some((a) => a === '--help' || a === '-h')
+}
+
+const rawArgs = process.argv.slice(2)
+const running: Promise<void> = passthroughRun(rawArgs) ? runCommand(main, { rawArgs }).then(() => undefined) : runMain(main)
+running.catch((e: unknown) => {
   if (e instanceof SbError) {
     console.error(`✗ ${e.message}${e.detail ? `\n${e.detail}` : ''}`)
     process.exitCode = e.exit

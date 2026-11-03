@@ -11,6 +11,8 @@ const CASES: Array<[string[], number]> = [
   [['accounts', '--json'], 0],
   [['mux'], 0],
   [['which', '--json'], 0],
+  [['agents', 'bk'], 0], // claude falso; o ambiente do filho não leva token
+  [['run', 'bk', '--', '--version'], 0],
   [['attach', 'admin1', 'bk', '--pool'], 0], // admin1 já está no pool do bk: idempotente
   [['detach', 'admin1', 'bk'], 0],
   [['accounts', 'rm', 'admin1'], 3], // sem --yes: recusa

@@ -1,5 +1,6 @@
 import { lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
+import { EXIT, SbError } from './errors.js'
 import { symlinkAtomic } from './fsx.js'
 import { muxLink, pinLink, tokenFile, type Paths } from './paths.js'
 import { KEYCHAIN } from './tokens.js'
@@ -54,6 +55,23 @@ export function checkSettingsTarget(link: string): TargetCheck {
   const token = (obj.env as { CLAUDE_CODE_OAUTH_TOKEN?: unknown } | null | undefined)?.CLAUDE_CODE_OAUTH_TOKEN
   if (typeof token !== 'string' || token === '') return { ok: false, problem: 'no-oauth' }
   return { ok: true, account }
+}
+
+const PROBLEM: Record<TargetProblem, string> = {
+  'missing-link': 'o link do mux não existe',
+  broken: 'o link do mux está quebrado (não aponta para um token em tokens/)',
+  'invalid-json': 'o token do mux tem JSON inválido (o claude ignoraria o settings e cairia no keychain)',
+  'no-oauth': 'o token do mux não tem CLAUDE_CODE_OAUTH_TOKEN',
+}
+
+/**
+ * Falha fechado (F6): `checkSettingsTarget` e, se o link não serve, `SbError` exit 1 com o problema e a dica do
+ * doctor. Devolve a conta para a qual o link aponta. É o que `sb which` e a abertura do `claude` compartilham.
+ */
+export function assertSettingsTarget(link: string, mux: string): string {
+  const check = checkSettingsTarget(link)
+  if (!check.ok) throw new SbError(`mux "${mux}": ${PROBLEM[check.problem]} (${link})`, EXIT.CHECK_FAILED, '  rode `sb doctor --fix`')
+  return check.account
 }
 
 /** `mux/<mux>.json` passa a apontar para `tokens/<conta>.json`, num único `rename`. */
