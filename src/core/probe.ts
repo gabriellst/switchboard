@@ -50,6 +50,13 @@ function windowOf(h: Headers, w: '5h' | '7d'): Window | undefined {
   return { utilization, resetsAt, status }
 }
 
+/** Erro derivado só do status HTTP (sem dados de uso aproveitáveis nos cabeçalhos). */
+function fromHttpStatus(httpStatus: number): ProbeResult {
+  if (httpStatus === 401 || httpStatus === 403) return { ok: false, error: 'dead-token', httpStatus }
+  if (httpStatus === 429) return { ok: false, error: 'rate-limited', httpStatus }
+  return { ok: false, error: 'unexpected', httpStatus }
+}
+
 /**
  * Sonda mínima (F1): uma mensagem de 1 token no haiku; o uso vem dos cabeçalhos unified.
  * Os cabeçalhos são lidos qualquer que seja o status HTTP (conta esgotada responde 429 com eles).
@@ -98,9 +105,10 @@ export async function probeToken(
     const sevenDay = windowOf(h, '7d')
     const status = str(h, 'status')
     const resetsAt = num(h, 'reset')
-    // Cabeçalhos incompletos ou ilegíveis: nada de resultado parcial nem NaN.
+    // Cabeçalhos incompletos ou ilegíveis: nada de resultado parcial nem NaN, mas o sinal
+    // HTTP não se perde (conta esgotada = 429 mesmo com formato de cabeçalho inesperado).
     if (!fiveHour || !sevenDay || status === undefined || resetsAt === undefined) {
-      return { ok: false, error: 'unexpected', httpStatus }
+      return fromHttpStatus(httpStatus)
     }
     const representativeClaim = str(h, 'representative-claim')
     const overageStatus = str(h, 'overage-status')
@@ -114,7 +122,5 @@ export async function probeToken(
       ...(overageStatus !== undefined && { overageStatus }),
     }
   }
-  if (httpStatus === 401 || httpStatus === 403) return { ok: false, error: 'dead-token', httpStatus }
-  if (httpStatus === 429) return { ok: false, error: 'rate-limited', httpStatus }
-  return { ok: false, error: 'unexpected', httpStatus }
+  return fromHttpStatus(httpStatus)
 }

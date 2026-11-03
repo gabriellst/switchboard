@@ -141,6 +141,29 @@ describe('probeToken', () => {
     }
   })
 
+  test('429 com 5h completo e 7d incompleto → rate-limited (mantém o sinal HTTP)', async () => {
+    const r = await probe(429, without('anthropic-ratelimit-unified-7d-reset'))
+    expect(r).toEqual({ ok: false, error: 'rate-limited', httpStatus: 429 })
+  })
+
+  test('429 com 5h-utilization não numérica → rate-limited', async () => {
+    const r = await probe(429, { ...H, 'anthropic-ratelimit-unified-5h-utilization': 'abc' })
+    expect(r).toEqual({ ok: false, error: 'rate-limited', httpStatus: 429 })
+  })
+
+  test('401/403 com cabeçalhos incompletos → dead-token; 200 incompleto segue unexpected', async () => {
+    const bad = { ...H, 'anthropic-ratelimit-unified-5h-reset': '' }
+    expect(await probe(401, bad)).toEqual({ ok: false, error: 'dead-token', httpStatus: 401 })
+    expect(await probe(403, bad)).toEqual({ ok: false, error: 'dead-token', httpStatus: 403 })
+    expect(await probe(500, bad)).toEqual({ ok: false, error: 'unexpected', httpStatus: 500 })
+    expect(await probe(200, without('anthropic-ratelimit-unified-7d-utilization'))).toEqual({ ok: false, error: 'unexpected', httpStatus: 200 })
+  })
+
+  test('5h-status allowed_warning passa verbatim', async () => {
+    const r = await probe(200, { ...H, 'anthropic-ratelimit-unified-5h-status': 'allowed_warning' })
+    expect(r).toMatchObject({ ok: true, fiveHour: { status: 'allowed_warning' } })
+  })
+
   test('status/reset globais ausentes → unexpected', async () => {
     expect(await probe(200, without('anthropic-ratelimit-unified-status'))).toEqual({ ok: false, error: 'unexpected', httpStatus: 200 })
     expect(await probe(200, without('anthropic-ratelimit-unified-reset'))).toEqual({ ok: false, error: 'unexpected', httpStatus: 200 })
