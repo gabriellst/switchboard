@@ -224,7 +224,7 @@ git add docs/superpowers/specs spikes/sessoes test/fixtures
 git commit -m "docs: F12–F14 dos spikes de sessão; fixtures do adaptador"
 ```
 
-- [ ] **Step 5: Gate G1 — mandar ao usuário o resumo (regras + evidência) e seguir com as Tasks 5–13**, que não dependem dos spikes. A Task 14 em diante só começa com o OK do usuário se alguma regra contradiz o §4 (o `queued: 1` já contradiz). Perguntar também se autoriza, numa conta quase esgotada, uma sessão de teste que bata no limite (gasta ≤ 3 % da janela de 5 h) para responder a pergunta aberta.
+- [ ] **Step 5: Gate G1 — decidido pelo controlador, não pelo usuário** (ledger, 03/11): as regras acima valem; a sessão de teste que bate no limite ficou de fora (nenhuma conta ≥ 85 % na janela de 5 h; forçar gastaria uso). O usuário vê o resumo no topo de `spikes/sessoes/RESULTADOS.md` e pode reverter.
 
 ---
 
@@ -688,32 +688,38 @@ test('writeJobFlags relê antes de gravar e faz backup', ...)                // 
 - Produces:
   - `interface Session { agent: AgentEntry; job: JobState | null; owner: Ownership; live: boolean /* tem pid */ }`
   - `loadSessions(ctx): Session[]` (só `kind == 'background'`).
-  - `type Activity = 'stopped' | 'scheduled' | 'limit-blocked' | 'busy' | 'free'`; `hasScheduledWork(s): boolean`, `isLimitBlocked(s): boolean`, `activityOf(s, callerJobId?: string): Activity`.
+  - `type Activity = 'stopped' | 'scheduled' | 'limit-blocked' | 'busy' | 'free'`; `hasScheduledWork(job: JobState | null, agent: AgentEntry): boolean`, `isLimitBlocked(s: Session): boolean`, `activityOf(s: Session, callerJobId?: string): Activity`.
   - `callerJobId(env): string | undefined` (basename de `CLAUDE_JOB_DIR`).
-  - `startedAt(ctx, s): number | null` (ms; implementação escolhida no G1: `agent.startedAt` ou `ps -o etime= -p <pid>` via `ctx.run`).
+  - `startedAt(s: Session): number` = `s.agent.startedAt` (ms; o instante em que o host foi (re)aberto — F14 do design; só vale para sessão viva; **não** é o início do processo, não chamar `ps`).
 
-Precedência de `activityOf` (as definições de `hasScheduledWork` e `isLimitBlocked` vêm do G1; abaixo, as provisórias):
+Regras medidas no G1 (design §3 F12–F14 e `spikes/sessoes/RESULTADOS.md`; provisórias, n pequeno), **substituem** a regra conservadora antiga ("qualquer `kinds`/`drainableMonitors` = agendado") — `kinds` só com `local_bash`/`local_agent` é trabalho DENTRO do turno e a sessão é `busy`, não `scheduled`:
 ```
-!live                                                   → 'stopped'
-s.agent.id == callerJobId                               → 'busy'   (nunca parar quem chamou)
-hasScheduledWork  (kinds.length > 0 || drainableMonitors > 0)        → 'scheduled'
-isLimitBlocked    (state 'blocked' && needs ^'rate limited' && tasks 0 && status ≠ 'busy') → 'limit-blocked'
+hasScheduledWork = agent.pid ≠ null ∧ job.inFlight ≠ null ∧ (kinds ∋ 'session_cron' ∨ kinds ∋ 'monitor' ∨ inFlight.wake ≠ null)
+isLimitBlocked   = live ∧ job.state == 'blocked' ∧ job.needs ^'rate limited' ∧ inFlight.tasks == 0 ∧ agent.status ≠ 'busy'   (queued pode ser 1)
+```
+Precedência de `activityOf`:
+```
+!live (sem pid)                                         → 'stopped'  (vale mesmo com job blocked/limite; estado do job é obsoleto sem pid)
+s.agent.id == callerJobId                               → 'busy'     (nunca parar quem chamou)
+hasScheduledWork                                        → 'scheduled'
+isLimitBlocked                                          → 'limit-blocked'
 status == 'busy' || tasks > 0 || queued > 0             → 'busy'
 senão                                                   → 'free'
 ```
+Parser tolerante (F12–F14): `job.state` ∈ {running, stopped, done, working, blocked, …}; `inFlight`, `drainableMonitors`, `selfWake`, `wake`, `fan` podem faltar; `inFlight`/`selfWake`/`fan` obsoletos em sessão sem pid. Risco aceito e documentado (design §4): um cron one-shot pendente que ficou invisível depois de respawn (`kinds []`) não é detectado.
 
 - [ ] **Step 1: Testes que falham** (um por fixture da Task 4, mais os casos sintéticos)
 
 ```ts
-test.each([
-  ['stopped', 'stopped'], ['live-idle', 'free'], ['live-busy', 'busy'],
-  ['limit-blocked', 'limit-blocked'], ['scheduled', 'scheduled'],
-])('fixture %s → %s', ...)
+test.each(/* linhas da tabela de test/fixtures/claude/README.md: fixture → Activity esperada */)('fixture %s → %s', ...)
+// esperados, por regra: stopped e stale-sem-pid → 'stopped' (inclusive a limit-blocked parada); live-idle → 'free';
+// live-busy (kinds local_*) → 'busy' e hasScheduledWork false; limit-blocked viva ociosa → 'limit-blocked';
+// limit-blocked viva com tasks 4 → 'busy'; scheduled-loop/-wakeup/-monitor/-cron → 'scheduled'; job.state 'running' sem drainableMonitors → não quebra o parser
 test('limit-blocked com queued 1 não é busy', ...)
 test('sessão que chamou é busy mesmo livre', ...)
-test('kinds local_bash com status busy → scheduled pela regra conservadora (não para)', ...)   // ajustar se o G1 mudou a regra
+test('kinds só com local_bash/local_agent → busy, NÃO scheduled (muda a regra conservadora antiga)', ...)
 test('pertença: mux, pin, legacy, foreign, none', ...)
-test('startedAt pela fonte escolhida no G1', ...)
+test('startedAt(s) devolve agent.startedAt em ms', ...)
 ```
 
 - [ ] **Step 2: Rodar e ver falhar** — `bun test test/sessions.test.ts` · FAIL.
