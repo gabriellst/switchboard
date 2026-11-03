@@ -1,0 +1,313 @@
+# switchboard (`sb`) — design
+
+> Status: design aprovado em conversa em 03/11/2026, aguardando o plano de implementação.
+> Substitui o `~/.local/bin/claude-conta` (Python, 900 linhas) quando estiver pronto.
+> Marcação: **[usuário]** = decidido pelo usuário · **[minha escolha]** = decisão de quem escreveu o
+> design, que o usuário viu e não contestou, mas pode mudar · **[builder]** = fica para quem implementa.
+
+## 1. Intenção e porquê
+
+O usuário roda dezenas de sessões do Claude Code em segundo plano (o daemon de `claude agents`),
+organizadas em abas do **cmux**. Cada aba é uma *view* `claude agents --cwd <pasta>` de um projeto
+(hoje: `bk-company`, `pessoal`, `berzerk/berzerk-club`). Ele tem várias contas Claude (assinaturas)
+e quer distribuir o trabalho entre elas.
+
+O `claude-conta` de hoje só sabe "uma conta ativa para tudo, menos o berzerk" (mais um `fixar`
+por sessão acrescentado em 03/11). Isso gerou atrito real: rodar `/conta admin1` numa sessão
+mudava a conta de **todas**, e a sessão que queria ficar na outra conta era arrastada.
+
+O `switchboard` é uma CLI no molde do `plugboard` (`gabriellst/plugboard`) que:
+
+1. **liga uma conta a cada mux** (cada aba/projeto) **[usuário]**;
+2. **troca a conta de um mux quando ela estiver acabando** (hot-swap), à mão ou sozinho **[usuário]**;
+3. **troca só uma sessão específica**, quando quiser **[usuário]**;
+4. **mostra o uso de cada conta e de todas juntas**: quanto já foi, se resetou, quando reseta **[usuário]**;
+5. **respeita uma ordem de prioridade** entre contas para escolher o destino da troca **[usuário]**;
+6. **sabe quais contas podem entrar no hot-swap** e quais não **[usuário]**.
+
+Sucesso = o usuário abre o cmux, cada aba trabalha na sua conta, nunca mais pensa em limite:
+quando uma conta acaba, o mux migra sozinho para a próxima e volta quando ela resetar.
+
+## 2. Objetivos, não-objetivos, anti-objetivos
+
+**Objetivos**
+- Conta por mux, override por sessão, hot-swap manual e automático com prioridade e pool, retorno à
+  conta preferida no reset, painel de uso por conta e total, migração completa do `claude-conta`.
+
+**Não-objetivos (v1)**
+- Trocar a conta de uma sessão **no meio de um turno** sem reiniciá-la — tecnicamente impossível
+  (ver §3, fato F4).
+- Retomar sozinho o turno que falhou por limite (enviar "continue" automaticamente). v1 notifica;
+  o usuário abre a sessão e pede para continuar **[minha escolha]**.
+- Trocar a conta de sessões interativas (`claude` em primeiro plano, `-p`): elas pegam a conta do
+  mux ao iniciar e só mudam no próximo início.
+- Medir a conta do keychain **[minha escolha]** (não chegar perto do keychain).
+- Distribuição pública (npm). v1 instala local; tarball de Release como o plugboard fica para depois.
+- Multiusuário/equipe.
+
+**Anti-objetivos (falha mesmo que funcione)**
+- **Mexer no login do keychain** (`/login`, `claude auth login`, gravar ou ler a credencial do
+  keychain). É a conta do berzerk; o berzerk nunca pode ser arrastado.
+- **Imprimir, logar ou gravar token fora do diretório de tokens.** Nem em `--json`, nem em erro.
+- **Interromper um turno em andamento** para trocar de conta. Troca só com a sessão livre.
+- **Deixar uma sessão rodar calada na conta errada.** O caso perigoso é o JSON de settings inválido,
+  que o Claude ignora e cai no keychain (F6). O `sb` tem que impedir e detectar isso.
+- **Gastar uso de verdade para medir uso.** A sonda tem que ser mínima.
+- **Repassar `CLAUDE_CODE_OAUTH_TOKEN` herdado** para um `claude` que possa subir o daemon: o
+  daemon herdaria o token e todas as sessões (inclusive berzerk) iriam junto.
+
+## 3. Fatos verificados (spike de 03/11/2026, Claude Code 2.1.317)
+
+Estes fatos são restrições. Foram medidos, não supostos.
+
+- **F1 — Uso legível pelos cabeçalhos.** `POST https://api.anthropic.com/v1/messages` com o token
+  OAuth da conta (`Authorization: Bearer <token>`, `anthropic-beta: oauth-2025-04-20`,
+  `anthropic-version: 2023-06-01`), `model: claude-haiku-4-5`, `max_tokens: 1`, system
+  `"You are Claude Code, Anthropic's official CLI for Claude."`, devolve 200 com:
+  `anthropic-ratelimit-unified-5h-utilization` (0–1), `-5h-reset` (epoch s), `-5h-status`
+  (`allowed`…), `-7d-utilization`, `-7d-reset`, `-7d-status`, `-status`, `-reset`,
+  `-representative-claim` (`five_hour`), `-overage-status`, `-overage-disabled-reason`,
+  `-fallback-percentage`. (Não testei se o system prompt é obrigatório — o builder pode verificar.)
+- **F2 — O endpoint de uso do `/usage` não serve.** `GET /api/oauth/usage` responde 403
+  `oauth_scope_insufficient` (exige `user:profile`); o token do `claude setup-token` só tem
+  `user:inference`. Uma conta tomou 429 no mesmo endpoint.
+- **F3 — Contas duplicadas existem.** `admin1` e `outra` (salvas no `claude-conta`) devolveram
+  utilização e resets idênticos: são a mesma conta logada duas vezes.
+- **F4 — Não há troca de token a quente.** (a) Trocar o conteúdo do arquivo de `--settings`
+  (`env.CLAUDE_CODE_OAUTH_TOKEN`) com o processo rodando: o processo continua com o token antigo.
+  (b) `apiKeyHelper` com `CLAUDE_CODE_API_KEY_HELPER_TTL_MS=3000`: trocar o token que o helper
+  devolve no meio da execução também não muda nada (testado em `-p`). Conclusão: trocar a conta de
+  uma sessão = **parar a sessão e reabri-la** com o mesmo id (a conversa continua).
+- **F5 — `apiKeyHelper` aceita token OAuth, mas desliga os conectores do claude.ai** ("claude.ai
+  connectors are disabled because … another auth source is set"). Por isso o `sb` usa
+  `env.CLAUDE_CODE_OAUTH_TOKEN` no settings, nunca `apiKeyHelper` **[minha escolha]**.
+- **F6 — Settings ausente vs inválido.** `--settings <arquivo inexistente>` ou link quebrado:
+  `Error: Settings file not found`, exit 1, não inicia (seguro). **JSON inválido: só avisa, ignora o
+  arquivo e roda no keychain** (perigoso). `{}`: roda no keychain (é como se representa "keychain").
+- **F7 — A view repassa `--settings`.** `claude agents --settings <x>`: "Settings file or JSON string
+  to apply to the agent view and dispatched sessions". Sessões despachadas por ela nascem com
+  `--settings <x>` nos `respawnFlags`.
+- **F8 — Estado das sessões.** `claude agents --json --all` lista `{id, kind ('background'|…),
+  status ('busy'|…), state ('working'|'blocked'|…), pid, cwd, name}`. O estado persistente fica em
+  `~/.claude/jobs/<id>/state.json` com `respawnFlags` (array de argv), `inFlight {tasks, queued}`,
+  `cwd`, `providerEnv` (vazio hoje). `claude stop <id>` para; a sessão volta **com o mesmo id e os
+  `respawnFlags` gravados** quando o usuário a abre. O daemon reescreve `state.json` enquanto a
+  sessão vive — só editar `respawnFlags` com a sessão parada (relendo antes de gravar).
+- **F9 — Login sem keychain.** `claude setup-token` rodado com `CLAUDE_CONFIG_DIR` temporário,
+  num pseudo-terminal, imprime um link de autorização e depois um token `sk-ant-oat01-…` de 1 ano,
+  sem tocar o keychain. O `claude-conta` faz isso hoje (`setup_token_pty`, linhas ~397–460).
+- **F10 — Variáveis que vazam.** Ao chamar `claude` de dentro de uma sessão, remover do ambiente:
+  `CLAUDECODE, CLAUDE_CODE_SESSION_ID, CLAUDE_CODE_CHILD_SESSION, CLAUDE_CODE_MESSAGING_SOCKET,
+  CLAUDE_CODE_MESSAGING_TOKEN, CLAUDE_JOB_DIR, CLAUDE_CODE_OAUTH_TOKEN, CLAUDE_CODE_ENTRYPOINT,
+  CLAUDE_CODE_SESSION_ATTENDED, CLAUDE_PID, CLAUDE_CODE_AGENT, CLAUDE_CONFIG_DIR` (lista do
+  `claude-conta`, `VARS_SESSAO`).
+- **F11 — `claude-conta` reescreve `--settings` só dentro de `~/.claude/contas/`** (`separar_settings`
+  compara o diretório do caminho). Relevante só durante a migração, enquanto os dois coexistirem.
+
+## 4. Modelo
+
+| Conceito | O que é |
+|---|---|
+| **Conta** | Um token de assinatura com nome, `priority` (inteiro; **menor = mais prioritária**) e `pool` (bool: pode ser destino de hot-swap). **[usuário]** prioridade e pool; **[minha escolha]** "menor = mais prioritária". |
+| **keychain** | Conta especial e reservada: o login do keychain. Settings = `{}`. Nunca medida, nunca no pool, nunca escrita. |
+| **Mux** | Nome + `root` (pasta) + `account` (a conta **preferida**) + `swap` (bool, default `true`). Corresponde a uma aba do cmux rodando `sb agents <mux>`. |
+| **Conta atual do mux** | A conta que o mux está usando agora. Igual à preferida, exceto durante um swap. Estado de runtime, não config. |
+| **Sessão do mux** | Sessão em segundo plano cujo `--settings` aponta para o arquivo do mux. **A pertença é pelo caminho do settings, não pela pasta** **[minha escolha]**. A pasta (`root`, a mais profunda vence) só escolhe o mux quando a sessão nasce fora de uma view (wrapper) ou na adoção/migração. |
+| **Sessão fixa (pin)** | Sessão cujo `--settings` aponta para `pins/<conta>.json`. Fica fora de todo swap. |
+| **Sessão estranha** | Qualquer outra (`--settings` de terceiros, ou legado do `claude-conta`). O `sb` não mexe, só reporta (e a migração adota). |
+
+### Regras de troca **[usuário]**, formalizadas **[minha escolha]**
+
+Uma conta está **disponível** quando a última medição diz `5h-utilization < threshold.fiveHour`,
+`7d-utilization < threshold.sevenDay` e status `allowed` — ou quando o reset da janela que a
+esgotou já passou (mesmo sem medição nova).
+
+A cada avaliação, para cada mux com `swap: true`:
+
+```
+desejada(mux) =
+  preferida                         se preferida disponível
+  senão, se preferida.pool = false  → preferida   (fica parado nela e avisa)   [usuário]
+  senão, a 1ª conta disponível do pool, por priority, distinta da preferida e sem duplicatas
+  senão (nenhuma disponível)        → fica na atual e avisa
+```
+
+- Isso dá o **retorno no reset** de graça: quando a preferida volta a estar disponível, ela é a
+  desejada outra vez **[usuário: "o ideal é pegar sempre ao resetar"]**.
+- Um mux numa conta reserva (fora do preferido) que também esgota vai para a próxima da fila.
+- **Contas duplicadas** contam como uma só (para destino e para o total do pool).
+- Histerese para não oscilar: **[builder]** (ex.: só voltar quando o reset passou ou a utilização caiu
+  X pontos abaixo do limite).
+- Mux com `swap: false` nunca troca (o berzerk).
+
+### Aplicar uma troca
+
+1. Repontar o link `mux/<mux>.json` para o token da conta nova (troca atômica: link temporário +
+   rename). Sessões **novas** do mux já nascem na conta nova (o settings é lido no início).
+2. Para cada sessão viva do mux iniciada antes da troca: se **livre** (`status != 'busy'` e
+   `inFlight.tasks == 0` e `inFlight.queued == 0`), `claude stop <id>` e esperar parar. Ocupadas
+   esperam o fim do turno (o `watch` tenta de novo). **Nunca** interromper um turno.
+3. Não é preciso reescrever `respawnFlags`: eles já apontam para `mux/<mux>.json`, que agora
+   aponta para a conta nova.
+4. Notificar (macOS, `osascript`) e registrar no log.
+
+Turno que falha porque a conta bateu no limite: a sessão fica livre, cai no passo 2, e ao ser
+reaberta já está na conta nova; o usuário pede "continue".
+
+## 5. Configuração e estado
+
+**[minha escolha]**, no molde do plugboard (JSONC com `$schema`, schema zod como fonte única,
+`strictObject`: chave desconhecida é erro).
+
+`~/.config/switchboard/config.jsonc` (sem segredo; pode ir para dotfiles):
+
+```jsonc
+{
+  "$schema": "…/schema.json",
+  "switchboard": 1,
+  "accounts": {
+    "gabriel":   { "priority": 1, "pool": true },
+    "admin1":    { "priority": 2, "pool": true },
+    "cliente-x": { "priority": 9, "pool": false }
+  },
+  "swap": {
+    "auto": true,
+    "threshold": { "fiveHour": 0.9, "sevenDay": 0.95 },
+    "returnOnReset": true,
+    "probeEvery": "5m"
+  },
+  "default": "bk",                      // mux para pastas que não casam com nenhum root [minha escolha]
+  "mux": {
+    "bk":      { "root": "~/Desktop/Projetos/bk-company", "account": "gabriel" },
+    "pessoal": { "root": "~/Desktop/Projetos/pessoal",    "account": "admin1" },
+    "berzerk": { "root": "~/Desktop/Projetos/berzerk",    "account": "keychain", "swap": false }
+  }
+}
+```
+
+`~/.local/state/switchboard/` (dir 700; nada aqui é versionado):
+
+| Caminho | Conteúdo |
+|---|---|
+| `tokens/<conta>.json` | `{"env":{"CLAUDE_CODE_OAUTH_TOKEN":"sk-ant-oat01-…"}}`, modo 600 |
+| `tokens/keychain.json` | `{}` |
+| `mux/<mux>.json` | link → `tokens/<conta atual>.json` |
+| `pins/<conta>.json` | link → `tokens/<conta>.json` |
+| `usage.json` | última medição por conta (sem token): utilizações, resets, status, `measuredAt`, grupo de duplicata |
+| `runtime.json` | conta atual de cada mux, último swap (quando, de→para, motivo) |
+| `log/` | `watch.log`, `login.log` |
+
+## 6. Medição de uso
+
+- Sonda = F1, uma chamada por **token distinto**, a cada `probeEvery` no `watch` e sob demanda em
+  `sb usage` (com cache: não sondar de novo se a medição tem menos de ~60 s) **[minha escolha]**.
+- **Duplicatas:** duas contas com os mesmos `5h-reset`, `7d-reset`, `5h-utilization` e
+  `7d-utilization` em duas medições seguidas formam um grupo; o painel mostra uma e lista as
+  outras como "mesma conta que …" **[minha escolha]**. O builder pode permitir `"sameAs"` explícito.
+- **Total do pool** = média das utilizações das contas distintas do pool, por janela. Só significa
+  "quanto do total já foi" se os planos forem iguais; o painel diz isso **[minha escolha]**.
+- keychain: "não medido".
+- Erros de sonda (401 = token morto, 429, rede) aparecem no painel e no `doctor`; conta com token
+  morto fica indisponível.
+
+## 7. Comandos
+
+Todos com `--json` quando produzem dados; nada interativo por padrão; exit codes como o plugboard
+(`0` ok · `1` verificação falhou · `2` config inválida · …) **[minha escolha]**.
+
+| Comando | Faz |
+|---|---|
+| `sb` · `sb usage [--json] [--watch]` | Painel (abaixo). `--watch` redesenha a cada N s |
+| `sb login <conta> [--priority N] [--no-pool] [--terminal]` | F9; abre o navegador, valida com uma sonda, grava o token (600) e a conta no config. `--terminal`: colar o token |
+| `sb accounts` | Lista contas: prioridade, pool, duplicatas, estado do token |
+| `sb mux [add <nome> --root <pasta> --account <conta> \| rm <nome>]` | Gerencia muxes |
+| `sb agents [mux]` | `exec claude agents --cwd <root> --settings <state>/mux/<mux>.json`. Sem nome: deduz pela pasta atual |
+| `sb run [mux] -- <args>` | `claude <args> --settings …/mux/<mux>.json` (interativo) |
+| `sb swap <mux> [conta]` | Troca manual; sem conta = a desejada pela regra (§4) ignorando a preferida |
+| `sb pin <sessão> <conta>` · `sb unpin <sessão>` | Fixa/solta (reescreve `respawnFlags` com a sessão parada; se ocupada, espera o fim do turno em segundo plano, como o `claude-conta fixar`) |
+| `sb watch` | Laço: mede, avalia, aplica swaps (se `auto`) ou notifica (se não), aplica pins pendentes |
+| `sb install` | LaunchAgent do `watch` (KeepAlive, sobrevive a reboot), wrapper zsh, comando `/sb` |
+| `sb doctor [--fix]` | Ver §9 |
+| `sb migrate [--simular]` | Ver §10 |
+
+Painel (números reais de 03/11 11:30):
+
+```
+$ sb
+conta     prio pool  5h              semanal          muxes
+gabriel    1    ✓    ░░░░░░░░░░  1%  ██░░░░░░░░ 15%   bk
+                     reseta 15:50    reseta 06/11
+admin1     2    ✓    ██░░░░░░░░ 24%  ████░░░░░░ 38%   pessoal
+  └ outra (mesma conta que admin1)
+keychain   –    –    não medido                       berzerk
+──────────────────────────────────────────────────────────
+pool       5h 13% · semanal 27%      auto-swap ligado (90% / 95%)
+sessões fixas: 95b0deff → admin1
+medido há 2 min
+```
+
+## 8. Integrações
+
+- **Wrapper zsh** (`claude()` como o `wrapper.zsh` do `claude-conta`): dentro de uma sessão
+  Claude → passa direto; com `--settings` explícito → passa direto; subcomandos de manutenção
+  (`auth`, `stop`, `rm`, `mcp`, `update`, `setup-token`, `daemon`…) → passa direto sem token;
+  senão acrescenta `--settings <state>/mux/<mux da pasta ou default>.json`. Sempre sem
+  `CLAUDE_CODE_OAUTH_TOKEN` no ambiente (anti-objetivo).
+- **cmux:** cada aba roda `sb agents <mux>`. Sem integração com a API do cmux na v1.
+- **Comando `/sb`** dentro do Claude: arquivo em `~/.claude/commands/sb.md` no formato do
+  `conta.md` atual (`!sb $ARGUMENTS`, `disable-model-invocation: true`).
+- **Notificações:** `osascript` (como hoje); desligáveis por env para testes.
+- **LaunchAgent:** `~/Library/LaunchAgents/<id>.switchboard.watch.plist`.
+
+## 9. `doctor`
+
+Erros: link de mux/pin quebrado (F6: a sessão não vai abrir); JSON de token inválido (F6: cairia no
+keychain calada); token sem `CLAUDE_CODE_OAUTH_TOKEN`; token morto (401); permissão de
+`tokens/*.json` diferente de 600; sessão em segundo plano sob o root de um mux **sem `--settings`**
+(rodaria no keychain); view `claude agents` aberta sem `--settings` do `sb`.
+Avisos: contas duplicadas no pool; mux preferindo conta fora do pool com `swap: true` (inócuo, mas
+confuso); sessões estranhas (legado `~/.claude/contas/`); `watch` parado.
+`--fix`: recria links, corrige permissões, adota sessões sem settings (pelo root).
+
+## 10. Migração do `claude-conta` (`sb migrate`) **[usuário: "depois vamos trocar todo nosso lance por ela"]**
+
+Com `--simular` primeiro, mostrando tudo o que faria:
+1. Importar `~/.claude/contas/<nome>.json` (exceto `ativa.json`; `padrao.json` = keychain) para
+   `tokens/`; prioridade inicial: a conta ativa primeiro, depois ordem alfabética, todas no pool
+   **[minha escolha]**; sinalizar duplicatas (F3).
+2. Criar muxes: um por raiz de `~/.claude/contas/excluir` (conta keychain, `swap: false`) e um por
+   view `claude agents --cwd` aberta (conta = a ativa atual).
+3. Reescrever `respawnFlags` das sessões em segundo plano **paradas**: `~/.claude/contas/ativa.json`
+   → `mux/<mux pela pasta>.json`; `~/.claude/contas-fixas/<c>.json` → `pins/<c>.json`. Vivas: na
+   próxima vez que estiverem livres (via `watch`), com o mesmo cuidado de F8.
+4. Parar o vigia do `claude-conta`; trocar a linha do wrapper no `~/.zshrc`; trocar `/conta` por `/sb`.
+5. Não apagar nada do `claude-conta`: mover para um backup e dizer onde está.
+6. Imprimir os comandos para reabrir cada aba do cmux com `sb agents <mux>`.
+
+## 11. Stack (molde do plugboard) **[minha escolha, seguindo o pedido]**
+
+TypeScript ESM; `bun` para desenvolver e testar (`bun test`); `tsdown` gera `dist/` para Node ≥ 20;
+CLI em `citty` (subcomandos carregados sob demanda); `zod` como fonte única do schema (gera
+`schema.json`); `jsonc-parser`. `core/` não conhece terminal (retorna dados, não imprime, não sai do
+processo); `commands/` finos; `report.ts` renderiza; erros com `EXIT`. Identificadores em inglês,
+mensagens ao usuário em português. `README.md` e `SPEC.md` em português.
+Testes com um `claude` falso (variável `SWITCHBOARD_CLAUDE` apontando para um binário de teste) e
+HTTP falso para a sonda; nenhum teste toca `~/.claude` real nem a API.
+Pseudo-terminal para o `setup-token`: **[builder]** (`node-pty`, `script -q /dev/null` do macOS, ou
+`Bun.spawn` com pty se disponível).
+
+## 12. Riscos
+
+- O formato de `state.json`, `claude agents --json` e dos cabeçalhos é interno do Claude Code e pode
+  mudar numa atualização. Isolar cada um num adaptador em `core/` com teste de contrato; o `doctor`
+  avisa quando o formato não for o esperado.
+- Termos de uso: usar várias assinaturas e alternar entre elas por limite é decisão do usuário; vale
+  conferir os termos do plano.
+- A sonda consome um pouquinho do uso de cada conta (1 token de saída a cada 5 min por conta).
+
+## 13. Deixado para o builder
+
+Histerese do retorno; intervalo do laço do `watch` (o `claude-conta` usa 30 s); formato exato do
+`--json`; layout do painel em telas estreitas; nomes internos dos módulos; detalhes de
+concorrência entre `watch` e comandos manuais (lock de arquivo); como o `pin` em segundo plano é
+supervisionado (processo desanexado vs fila do `watch`).
