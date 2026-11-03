@@ -1,0 +1,172 @@
+[
+  {
+    "pid": 41001,
+    "id": "a1b2c3d4",
+    "cwd": "/Users/x/proj/live-busy",
+    "kind": "background",
+    "startedAt": 1793720010700,
+    "sessionId": "a1b2c3d4-a1b2-41b2-8b2c-a1b2c3d4a1b2",
+    "name": "live-busy",
+    "status": "busy",
+    "state": "working"
+  },
+  {
+    "pid": 41002,
+    "id": "b2c3d4e5",
+    "cwd": "/Users/x/proj/live-idle",
+    "kind": "background",
+    "startedAt": 1793720020700,
+    "sessionId": "b2c3d4e5-b2c3-42c3-8c3d-b2c3d4e5b2c3",
+    "name": "live-idle",
+    "status": "idle",
+    "state": "done"
+  },
+  {
+    "id": "c3d4e5f6",
+    "cwd": "/Users/x/proj/stopped",
+    "kind": "background",
+    "startedAt": 1793720030000,
+    "sessionId": "c3d4e5f6-c3d4-43d4-8d4e-c3d4e5f6c3d4",
+    "name": "stopped",
+    "state": "stopped"
+  },
+  {
+    "id": "d4e5f6a7",
+    "cwd": "/Users/x/proj/limit-blocked-stopped",
+    "kind": "background",
+    "startedAt": 1793720040000,
+    "sessionId": "d4e5f6a7-d4e5-44e5-8e5f-d4e5f6a7d4e5",
+    "name": "limit-blocked-stopped",
+    "state": "blocked"
+  },
+  {
+    "pid": 41005,
+    "id": "e5f6a7b8",
+    "cwd": "/Users/x/proj/limit-blocked-live-idle",
+    "kind": "background",
+    "startedAt": 1793720050700,
+    "sessionId": "e5f6a7b8-e5f6-45f6-8f6a-e5f6a7b8e5f6",
+    "name": "limit-blocked-live-idle",
+    "status": "idle",
+    "state": "blocked"
+  },
+  {
+    "pid": 41006,
+    "id": "f6a7b8c9",
+    "cwd": "/Users/x/proj/limit-blocked-live-busy",
+    "kind": "background",
+    "startedAt": 1793720060700,
+    "sessionId": "f6a7b8c9-f6a7-46a7-8a7b-f6a7b8c9f6a7",
+    "name": "limit-blocked-live-busy",
+    "status": "busy",
+    "state": "blocked"
+  },
+  {
+    "pid": 41007,
+    "id": "11aa22bb",
+    "cwd": "/Users/x/proj/scheduled-loop",
+    "kind": "background",
+    "startedAt": 1793720070700,
+    "sessionId": "11aa22bb-11aa-41aa-8aa2-11aa22bb11aa",
+    "name": "scheduled-loop",
+    "status": "idle",
+    "state": "working"
+  },
+  {
+    "pid": 41008,
+    "id": "22bb33cc",
+    "cwd": "/Users/x/proj/scheduled-wakeup",
+    "kind": "background",
+    "startedAt": 1793720080700,
+    "sessionId": "22bb33cc-22bb-42bb-8bb3-22bb33cc22bb",
+    "name": "scheduled-wakeup",
+    "status": "idle",
+    "state": "working"
+  },
+  {
+    "pid": 41009,
+    "id": "33cc44dd",
+    "cwd": "/Users/x/proj/scheduled-monitor",
+    "kind": "background",
+    "startedAt": 1793720090700,
+    "sessionId": "33cc44dd-33cc-43cc-8cc4-33cc44dd33cc",
+    "name": "scheduled-monitor",
+    "status": "busy",
+    "state": "working"
+  },
+  {
+    "pid": 41010,
+    "id": "44dd55ee",
+    "cwd": "/Users/x/proj/scheduled-cron",
+    "kind": "background",
+    "startedAt": 1793720100700,
+    "sessionId": "44dd55ee-44dd-44dd-8dd5-44dd55ee44dd",
+    "name": "scheduled-cron",
+    "status": "idle",
+    "state": "working"
+  },
+  {
+    "pid": 41011,
+    "id": "55ee66ff",
+    "cwd": "/Users/x/proj/foreign-settings",
+    "kind": "background",
+    "startedAt": 1793720110700,
+    "sessionId": "55ee66ff-55ee-45ee-8ee6-55ee66ff55ee",
+    "name": "foreign-settings",
+    "status": "idle",
+    "state": "done"
+  },
+  {
+    "pid": 41012,
+    "id": "66ff7788",
+    "cwd": "/Users/x/proj/no-settings",
+    "kind": "background",
+    "startedAt": 1793720120700,
+    "sessionId": "66ff7788-66ff-46ff-8ff7-66ff778866ff",
+    "name": "no-settings",
+    "status": "idle",
+    "state": "done"
+  },
+  {
+    "pid": 41013,
+    "id": "77889900",
+    "cwd": "/Users/x/proj/legacy-settings",
+    "kind": "background",
+    "startedAt": 1793720130700,
+    "sessionId": "77889900-7788-4788-8889-778899007788",
+    "name": "legacy-settings",
+    "status": "idle",
+    "state": "done"
+  },
+  {
+    "pid": 41014,
+    "id": "88990011",
+    "cwd": "/Users/x/proj/pinned",
+    "kind": "background",
+    "startedAt": 1793720140700,
+    "sessionId": "88990011-8899-4899-8990-889900118899",
+    "name": "pinned",
+    "status": "idle",
+    "state": "done"
+  },
+  {
+    "pid": 41015,
+    "id": "99001122",
+    "cwd": "/Users/x/proj/running-no-drainable",
+    "kind": "background",
+    "startedAt": 1793720150700,
+    "sessionId": "99001122-9900-4900-8001-990011229900",
+    "name": "running-no-drainable",
+    "status": "idle",
+    "state": "working"
+  },
+  {
+    "id": "aa001122",
+    "cwd": "/Users/x/proj/stale-state-no-pid",
+    "kind": "background",
+    "startedAt": 1793720160000,
+    "sessionId": "aa001122-aa00-4a00-8001-aa001122aa00",
+    "name": "stale-state-no-pid",
+    "state": "working"
+  }
+]

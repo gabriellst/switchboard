@@ -1,0 +1,43 @@
+{
+  "state": "working",
+  "detail": "Fixture: loop recorrente",
+  "tempo": "idle",
+  "inFlight": {
+    "tasks": 1,
+    "queued": 0,
+    "kinds": [
+      "session_cron"
+    ],
+    "drainableMonitors": 0,
+    "selfWake": true
+  },
+  "tokens": 1007,
+  "output": null,
+  "children": null,
+  "template": "claude",
+  "respawnFlags": [
+    "--name",
+    "scheduled-loop",
+    "--model",
+    "haiku",
+    "--allowed-tools",
+    "Read",
+    "--allowed-tools",
+    "Grep",
+    "--settings",
+    "~/.local/state/switchboard/mux/bk.json"
+  ],
+  "intent": "Fixture: intent generico",
+  "name": "scheduled-loop",
+  "nameSource": "user",
+  "sessionId": "11aa22bb-11aa-41aa-8aa2-11aa22bb11aa",
+  "resumeSessionId": "11aa22bb-11aa-41aa-8aa2-11aa22bb11aa",
+  "daemonShort": "11aa22bb",
+  "cliVersion": "2.1.317",
+  "cwd": "/Users/x/proj/scheduled-loop",
+  "providerEnv": {},
+  "backend": "daemon",
+  "createdAt": "2026-11-03T15:34:30.000Z",
+  "updatedAt": "2026-11-03T15:34:35.000Z",
+  "firstTerminalAt": null
+}

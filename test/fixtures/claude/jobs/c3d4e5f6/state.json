@@ -1,0 +1,37 @@
+{
+  "state": "stopped",
+  "detail": "Fixture: sessao parada",
+  "tempo": "idle",
+  "tokens": 1003,
+  "output": {
+    "result": "Fixture: resultado"
+  },
+  "children": null,
+  "template": "claude",
+  "respawnFlags": [
+    "--name",
+    "stopped",
+    "--model",
+    "haiku",
+    "--allowed-tools",
+    "Read",
+    "--allowed-tools",
+    "Grep",
+    "--settings",
+    "~/.local/state/switchboard/mux/bk.json"
+  ],
+  "intent": "Fixture: intent generico",
+  "name": "stopped",
+  "nameSource": "user",
+  "sessionId": "c3d4e5f6-c3d4-43d4-8d4e-c3d4e5f6c3d4",
+  "resumeSessionId": "c3d4e5f6-c3d4-43d4-8d4e-c3d4e5f6c3d4",
+  "daemonShort": "c3d4e5f6",
+  "cliVersion": "2.1.317",
+  "cwd": "/Users/x/proj/stopped",
+  "providerEnv": {},
+  "backend": "daemon",
+  "createdAt": "2026-11-03T15:33:50.000Z",
+  "updatedAt": "2026-11-03T15:33:55.000Z",
+  "firstTerminalAt": "2026-11-03T15:33:53.000Z",
+  "lastTerminalAt": "2026-11-03T15:33:53.500Z"
+}

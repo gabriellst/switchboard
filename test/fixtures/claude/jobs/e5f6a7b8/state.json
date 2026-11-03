@@ -1,0 +1,41 @@
+{
+  "state": "blocked",
+  "detail": "You've hit your weekly limit · resets Nov 8 at 8pm (America/Fortaleza)",
+  "tempo": "blocked",
+  "needs": "rate limited — wait and retry · You've hit your weekly limit · resets Nov 8 at 8pm (America/Fortaleza)",
+  "inFlight": {
+    "tasks": 0,
+    "queued": 1,
+    "kinds": [],
+    "drainableMonitors": 0
+  },
+  "tokens": 1005,
+  "output": null,
+  "children": null,
+  "template": "claude",
+  "respawnFlags": [
+    "--name",
+    "limit-blocked-live-idle",
+    "--model",
+    "haiku",
+    "--allowed-tools",
+    "Read",
+    "--allowed-tools",
+    "Grep",
+    "--settings",
+    "~/.local/state/switchboard/mux/bk.json"
+  ],
+  "intent": "Fixture: intent generico",
+  "name": "limit-blocked-live-idle",
+  "nameSource": "user",
+  "sessionId": "e5f6a7b8-e5f6-45f6-8f6a-e5f6a7b8e5f6",
+  "resumeSessionId": "e5f6a7b8-e5f6-45f6-8f6a-e5f6a7b8e5f6",
+  "daemonShort": "e5f6a7b8",
+  "cliVersion": "2.1.317",
+  "cwd": "/Users/x/proj/limit-blocked-live-idle",
+  "providerEnv": {},
+  "backend": "daemon",
+  "createdAt": "2026-11-03T15:34:10.000Z",
+  "updatedAt": "2026-11-03T15:34:15.000Z",
+  "firstTerminalAt": null
+}

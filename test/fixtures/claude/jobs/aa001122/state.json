@@ -1,0 +1,43 @@
+{
+  "state": "done",
+  "detail": "Fixture: state.json obsoleto de sessao sem pid",
+  "tempo": "idle",
+  "inFlight": {
+    "tasks": 1,
+    "queued": 0,
+    "kinds": [
+      "session_cron"
+    ],
+    "drainableMonitors": 0,
+    "selfWake": true
+  },
+  "tokens": 1016,
+  "output": null,
+  "children": null,
+  "template": "claude",
+  "respawnFlags": [
+    "--name",
+    "stale-state-no-pid",
+    "--model",
+    "haiku",
+    "--allowed-tools",
+    "Read",
+    "--allowed-tools",
+    "Grep",
+    "--settings",
+    "~/.local/state/switchboard/mux/bk.json"
+  ],
+  "intent": "Fixture: intent generico",
+  "name": "stale-state-no-pid",
+  "nameSource": "user",
+  "sessionId": "aa001122-aa00-4a00-8001-aa001122aa00",
+  "resumeSessionId": "aa001122-aa00-4a00-8001-aa001122aa00",
+  "daemonShort": "aa001122",
+  "cliVersion": "2.1.317",
+  "cwd": "/Users/x/proj/stale-state-no-pid",
+  "providerEnv": {},
+  "backend": "daemon",
+  "createdAt": "2026-11-03T15:36:00.000Z",
+  "updatedAt": "2026-11-03T15:36:05.000Z",
+  "firstTerminalAt": "2026-11-03T15:36:03.000Z"
+}

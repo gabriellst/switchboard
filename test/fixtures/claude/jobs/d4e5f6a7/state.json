@@ -1,0 +1,41 @@
+{
+  "state": "blocked",
+  "detail": "You've hit your 5-hour limit · resets 4:20pm (America/Fortaleza)",
+  "tempo": "blocked",
+  "needs": "rate limited — wait and retry · You've hit your 5-hour limit · resets 4:20pm (America/Fortaleza)",
+  "inFlight": {
+    "tasks": 0,
+    "queued": 1,
+    "kinds": [],
+    "drainableMonitors": 0
+  },
+  "tokens": 1004,
+  "output": null,
+  "children": null,
+  "template": "claude",
+  "respawnFlags": [
+    "--name",
+    "limit-blocked-stopped",
+    "--model",
+    "haiku",
+    "--allowed-tools",
+    "Read",
+    "--allowed-tools",
+    "Grep",
+    "--settings",
+    "~/.local/state/switchboard/mux/bk.json"
+  ],
+  "intent": "Fixture: intent generico",
+  "name": "limit-blocked-stopped",
+  "nameSource": "user",
+  "sessionId": "d4e5f6a7-d4e5-44e5-8e5f-d4e5f6a7d4e5",
+  "resumeSessionId": "d4e5f6a7-d4e5-44e5-8e5f-d4e5f6a7d4e5",
+  "daemonShort": "d4e5f6a7",
+  "cliVersion": "2.1.317",
+  "cwd": "/Users/x/proj/limit-blocked-stopped",
+  "providerEnv": {},
+  "backend": "daemon",
+  "createdAt": "2026-11-03T15:34:00.000Z",
+  "updatedAt": "2026-11-03T15:34:05.000Z",
+  "firstTerminalAt": null
+}

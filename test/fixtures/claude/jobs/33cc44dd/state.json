@@ -1,0 +1,50 @@
+{
+  "state": "working",
+  "detail": "Fixture: monitor vivo",
+  "tempo": "idle",
+  "inFlight": {
+    "tasks": 1,
+    "queued": 0,
+    "kinds": [
+      "monitor"
+    ],
+    "drainableMonitors": 0
+  },
+  "fan": [
+    {
+      "id": "bm0fixture1",
+      "kind": "monitor",
+      "label": "Fixture: monitor",
+      "startedAt": 1793720009000
+    }
+  ],
+  "tokens": 1009,
+  "output": null,
+  "children": null,
+  "template": "claude",
+  "respawnFlags": [
+    "--name",
+    "scheduled-monitor",
+    "--model",
+    "haiku",
+    "--allowed-tools",
+    "Read",
+    "--allowed-tools",
+    "Grep",
+    "--settings",
+    "~/.local/state/switchboard/mux/bk.json"
+  ],
+  "intent": "Fixture: intent generico",
+  "name": "scheduled-monitor",
+  "nameSource": "user",
+  "sessionId": "33cc44dd-33cc-43cc-8cc4-33cc44dd33cc",
+  "resumeSessionId": "33cc44dd-33cc-43cc-8cc4-33cc44dd33cc",
+  "daemonShort": "33cc44dd",
+  "cliVersion": "2.1.317",
+  "cwd": "/Users/x/proj/scheduled-monitor",
+  "providerEnv": {},
+  "backend": "daemon",
+  "createdAt": "2026-11-03T15:34:50.000Z",
+  "updatedAt": "2026-11-03T15:34:55.000Z",
+  "firstTerminalAt": null
+}

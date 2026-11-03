@@ -1,0 +1,50 @@
+{
+  "state": "working",
+  "detail": "Fixture: turno em andamento",
+  "tempo": "active",
+  "inFlight": {
+    "tasks": 1,
+    "queued": 0,
+    "kinds": [
+      "local_agent"
+    ],
+    "drainableMonitors": 0
+  },
+  "fan": [
+    {
+      "id": "aaaa1111bbbb2222c",
+      "kind": "agent",
+      "label": "Fixture: agente em segundo plano",
+      "startedAt": 1793720001000
+    }
+  ],
+  "tokens": 1001,
+  "output": null,
+  "children": null,
+  "template": "claude",
+  "respawnFlags": [
+    "--name",
+    "live-busy",
+    "--model",
+    "haiku",
+    "--allowed-tools",
+    "Read",
+    "--allowed-tools",
+    "Grep",
+    "--settings",
+    "~/.local/state/switchboard/mux/bk.json"
+  ],
+  "intent": "Fixture: intent generico",
+  "name": "live-busy",
+  "nameSource": "user",
+  "sessionId": "a1b2c3d4-a1b2-41b2-8b2c-a1b2c3d4a1b2",
+  "resumeSessionId": "a1b2c3d4-a1b2-41b2-8b2c-a1b2c3d4a1b2",
+  "daemonShort": "a1b2c3d4",
+  "cliVersion": "2.1.317",
+  "cwd": "/Users/x/proj/live-busy",
+  "providerEnv": {},
+  "backend": "daemon",
+  "createdAt": "2026-11-03T15:33:30.000Z",
+  "updatedAt": "2026-11-03T15:33:35.000Z",
+  "firstTerminalAt": null
+}

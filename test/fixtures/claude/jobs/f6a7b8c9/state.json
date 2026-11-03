@@ -1,0 +1,44 @@
+{
+  "state": "blocked",
+  "detail": "You've hit your weekly limit · resets Nov 8 at 8pm (America/Fortaleza)",
+  "tempo": "blocked",
+  "needs": "rate limited — wait and retry · You've hit your weekly limit · resets Nov 8 at 8pm (America/Fortaleza)",
+  "inFlight": {
+    "tasks": 4,
+    "queued": 1,
+    "kinds": [
+      "local_agent",
+      "local_bash"
+    ],
+    "drainableMonitors": 0
+  },
+  "tokens": 1006,
+  "output": null,
+  "children": null,
+  "template": "claude",
+  "respawnFlags": [
+    "--name",
+    "limit-blocked-live-busy",
+    "--model",
+    "haiku",
+    "--allowed-tools",
+    "Read",
+    "--allowed-tools",
+    "Grep",
+    "--settings",
+    "~/.local/state/switchboard/mux/bk.json"
+  ],
+  "intent": "Fixture: intent generico",
+  "name": "limit-blocked-live-busy",
+  "nameSource": "user",
+  "sessionId": "f6a7b8c9-f6a7-46a7-8a7b-f6a7b8c9f6a7",
+  "resumeSessionId": "f6a7b8c9-f6a7-46a7-8a7b-f6a7b8c9f6a7",
+  "daemonShort": "f6a7b8c9",
+  "cliVersion": "2.1.317",
+  "cwd": "/Users/x/proj/limit-blocked-live-busy",
+  "providerEnv": {},
+  "backend": "daemon",
+  "createdAt": "2026-11-03T15:34:20.000Z",
+  "updatedAt": "2026-11-03T15:34:25.000Z",
+  "firstTerminalAt": null
+}

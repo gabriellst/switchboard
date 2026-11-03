@@ -1,0 +1,40 @@
+{
+  "state": "done",
+  "detail": "Fixture: settings legado do claude-conta",
+  "tempo": "idle",
+  "inFlight": {
+    "tasks": 0,
+    "queued": 0,
+    "kinds": [],
+    "drainableMonitors": 0
+  },
+  "tokens": 1013,
+  "output": null,
+  "children": null,
+  "template": "claude",
+  "respawnFlags": [
+    "--name",
+    "legacy-settings",
+    "--model",
+    "haiku",
+    "--allowed-tools",
+    "Read",
+    "--allowed-tools",
+    "Grep",
+    "--settings",
+    "~/.claude/contas/ativa.json"
+  ],
+  "intent": "Fixture: intent generico",
+  "name": "legacy-settings",
+  "nameSource": "user",
+  "sessionId": "77889900-7788-4788-8889-778899007788",
+  "resumeSessionId": "77889900-7788-4788-8889-778899007788",
+  "daemonShort": "77889900",
+  "cliVersion": "2.1.317",
+  "cwd": "/Users/x/proj/legacy-settings",
+  "providerEnv": {},
+  "backend": "daemon",
+  "createdAt": "2026-11-03T15:35:30.000Z",
+  "updatedAt": "2026-11-03T15:35:35.000Z",
+  "firstTerminalAt": "2026-11-03T15:35:33.000Z"
+}

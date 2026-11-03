@@ -1,0 +1,41 @@
+{
+  "state": "running",
+  "detail": "Fixture: logo apos respawn",
+  "tempo": "idle",
+  "inFlight": {
+    "tasks": 1,
+    "queued": 0,
+    "kinds": [
+      "session_cron"
+    ]
+  },
+  "tokens": 1015,
+  "output": null,
+  "children": null,
+  "template": "claude",
+  "respawnFlags": [
+    "--name",
+    "running-no-drainable",
+    "--model",
+    "haiku",
+    "--allowed-tools",
+    "Read",
+    "--allowed-tools",
+    "Grep",
+    "--settings",
+    "~/.local/state/switchboard/mux/bk.json"
+  ],
+  "intent": "Fixture: intent generico",
+  "name": "running-no-drainable",
+  "nameSource": "user",
+  "sessionId": "99001122-9900-4900-8001-990011229900",
+  "resumeSessionId": "99001122-9900-4900-8001-990011229900",
+  "daemonShort": "99001122",
+  "cliVersion": "2.1.317",
+  "cwd": "/Users/x/proj/running-no-drainable",
+  "providerEnv": {},
+  "backend": "daemon",
+  "createdAt": "2026-11-03T15:35:50.000Z",
+  "updatedAt": "2026-11-03T15:35:55.000Z",
+  "firstTerminalAt": null
+}

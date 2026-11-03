@@ -1,0 +1,38 @@
+{
+  "state": "done",
+  "detail": "Fixture: sem settings",
+  "tempo": "idle",
+  "inFlight": {
+    "tasks": 0,
+    "queued": 0,
+    "kinds": [],
+    "drainableMonitors": 0
+  },
+  "tokens": 1012,
+  "output": null,
+  "children": null,
+  "template": "claude",
+  "respawnFlags": [
+    "--name",
+    "no-settings",
+    "--model",
+    "haiku",
+    "--allowed-tools",
+    "Read",
+    "--allowed-tools",
+    "Grep"
+  ],
+  "intent": "Fixture: intent generico",
+  "name": "no-settings",
+  "nameSource": "user",
+  "sessionId": "66ff7788-66ff-46ff-8ff7-66ff778866ff",
+  "resumeSessionId": "66ff7788-66ff-46ff-8ff7-66ff778866ff",
+  "daemonShort": "66ff7788",
+  "cliVersion": "2.1.317",
+  "cwd": "/Users/x/proj/no-settings",
+  "providerEnv": {},
+  "backend": "daemon",
+  "createdAt": "2026-11-03T15:35:20.000Z",
+  "updatedAt": "2026-11-03T15:35:25.000Z",
+  "firstTerminalAt": "2026-11-03T15:35:23.000Z"
+}

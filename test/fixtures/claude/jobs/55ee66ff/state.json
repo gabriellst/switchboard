@@ -1,0 +1,40 @@
+{
+  "state": "done",
+  "detail": "Fixture: settings de terceiros",
+  "tempo": "idle",
+  "inFlight": {
+    "tasks": 0,
+    "queued": 0,
+    "kinds": [],
+    "drainableMonitors": 0
+  },
+  "tokens": 1011,
+  "output": null,
+  "children": null,
+  "template": "claude",
+  "respawnFlags": [
+    "--name",
+    "foreign-settings",
+    "--model",
+    "haiku",
+    "--allowed-tools",
+    "Read",
+    "--allowed-tools",
+    "Grep",
+    "--settings",
+    "/tmp/outro.json"
+  ],
+  "intent": "Fixture: intent generico",
+  "name": "foreign-settings",
+  "nameSource": "user",
+  "sessionId": "55ee66ff-55ee-45ee-8ee6-55ee66ff55ee",
+  "resumeSessionId": "55ee66ff-55ee-45ee-8ee6-55ee66ff55ee",
+  "daemonShort": "55ee66ff",
+  "cliVersion": "2.1.317",
+  "cwd": "/Users/x/proj/foreign-settings",
+  "providerEnv": {},
+  "backend": "daemon",
+  "createdAt": "2026-11-03T15:35:10.000Z",
+  "updatedAt": "2026-11-03T15:35:15.000Z",
+  "firstTerminalAt": "2026-11-03T15:35:13.000Z"
+}

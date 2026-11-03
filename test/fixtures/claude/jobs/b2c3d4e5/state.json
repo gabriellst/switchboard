@@ -1,0 +1,42 @@
+{
+  "state": "done",
+  "detail": "Fixture: turno concluido",
+  "tempo": "idle",
+  "inFlight": {
+    "tasks": 0,
+    "queued": 0,
+    "kinds": [],
+    "drainableMonitors": 0
+  },
+  "tokens": 1002,
+  "output": {
+    "result": "Fixture: resultado"
+  },
+  "children": null,
+  "template": "claude",
+  "respawnFlags": [
+    "--name",
+    "live-idle",
+    "--model",
+    "haiku",
+    "--allowed-tools",
+    "Read",
+    "--allowed-tools",
+    "Grep",
+    "--settings",
+    "~/.local/state/switchboard/mux/bk.json"
+  ],
+  "intent": "Fixture: intent generico",
+  "name": "live-idle",
+  "nameSource": "user",
+  "sessionId": "b2c3d4e5-b2c3-42c3-8c3d-b2c3d4e5b2c3",
+  "resumeSessionId": "b2c3d4e5-b2c3-42c3-8c3d-b2c3d4e5b2c3",
+  "daemonShort": "b2c3d4e5",
+  "cliVersion": "2.1.317",
+  "cwd": "/Users/x/proj/live-idle",
+  "providerEnv": {},
+  "backend": "daemon",
+  "createdAt": "2026-11-03T15:33:40.000Z",
+  "updatedAt": "2026-11-03T15:33:45.000Z",
+  "firstTerminalAt": "2026-11-03T15:33:43.000Z"
+}
