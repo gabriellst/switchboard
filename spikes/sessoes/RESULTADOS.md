@@ -17,7 +17,7 @@ em `test/fixtures/claude/` (README ali) cobrem cada caso.
   risco **aceito e documentado**. Mitigações **PROPOSTAS / NÃO TESTADAS**: nunca agir enquanto `tempo == "active"` ou
   `agents.status == "busy"`; tratar sessão reaberta há pouco como "assumir trabalho agendado" (N não definido).
 - `startedAt` = `agents.startedAt` de `claude agents --json --all`: o instante em que o host foi (re)aberto, ≈ 0,5-0,7 s
-  depois da reivindicação do processo reserva (`claimed-spare`). Mudou em todo respawn testado. **Não** é o início do
+  depois da reivindicação do processo reserva (`claimed-spare`). Mudou no respawn testado (um respawn bem-sucedido; o outro crashou). **Não** é o início do
   processo do SO (`ps` mostrou lstart bem anterior). Em sessão parada vale o `createdAt` do job, então só tem sentido
   para sessão **viva**. Task 15 (`restartStale`): comparar `startedAt < runtime.mux[mux].since` só para sessões vivas.
   Evidência: §2, "`startedAt` de `agents --json` acompanha o início do processo?".

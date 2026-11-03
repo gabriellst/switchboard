@@ -1,8 +1,8 @@
 {
   "state": "blocked",
-  "detail": "You've hit your 5-hour limit · resets 4:20pm (America/Fortaleza)",
+  "detail": "You've hit your 5-hour limit · resets 4:20pm (UTC)",
   "tempo": "blocked",
-  "needs": "rate limited — wait and retry · You've hit your 5-hour limit · resets 4:20pm (America/Fortaleza)",
+  "needs": "rate limited — wait and retry · You've hit your 5-hour limit · resets 4:20pm (UTC)",
   "inFlight": {
     "tasks": 0,
     "queued": 1,

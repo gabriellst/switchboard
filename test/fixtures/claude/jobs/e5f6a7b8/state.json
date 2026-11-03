@@ -1,8 +1,8 @@
 {
   "state": "blocked",
-  "detail": "You've hit your weekly limit · resets Nov 8 at 8pm (America/Fortaleza)",
+  "detail": "You've hit your weekly limit · resets Nov 8 at 8pm (UTC)",
   "tempo": "blocked",
-  "needs": "rate limited — wait and retry · You've hit your weekly limit · resets Nov 8 at 8pm (America/Fortaleza)",
+  "needs": "rate limited — wait and retry · You've hit your weekly limit · resets Nov 8 at 8pm (UTC)",
   "inFlight": {
     "tasks": 0,
     "queued": 1,

@@ -109,7 +109,7 @@ Estes fatos são restrições. Foram medidos, não supostos.
 - **F12 — Estado depois de um turno que falha por limite. [spike 03/11]** `job.state == "blocked"` e
   `tempo "blocked"`, `needs` começando com `rate limited — wait and retry` (o texto traz a janela, `5-hour` ou
   `weekly`, e o reset), e **`inFlight.queued == 1` mesmo sem trabalho nenhum**: a regra "livre = `queued == 0`" nunca
-  pararia essa sessão. Sessão viva presa por limite com `tasks == 0`: `status` `idle` com pid; com `tasks > 0`
+  pararia essa sessão. Sessão viva presa por limite (n = 1 por caso) com `tasks == 0`: `status` `idle` com pid; com `tasks > 0`
   (agentes/bash em segundo plano): `status` `busy`. Sessões históricas, paradas com o limite pendente: `blocked`,
   sem `status` e sem `pid`. Não observado: a sessão entrar no limite, sair dele no reset, e o item `queued` rodar de
   novo com outro token. Dados: `spikes/sessoes/RESULTADOS.md` §1.
