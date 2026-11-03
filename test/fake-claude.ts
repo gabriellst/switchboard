@@ -20,6 +20,7 @@
 //   stop.json              — estado do atraso (`{ id, polls }`), gerado pelo próprio fake
 //   exit-code              — (opcional) código de saída das chamadas que não são agents/stop/setup-token
 //   sleep                  — (opcional) milissegundos que essas chamadas dormem antes de sair (simula sessão interativa; máx. 40 s)
+//   kill-self              — (opcional) nome de um sinal (ex.: SIGUSR1): essas chamadas matam a si mesmas com ele
 // `stop <id>` tira `pid`/`status` da entrada de agents.json e põe `state: 'stopped'`; id desconhecido → exit 1.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -141,4 +142,9 @@ if (argv[0] === 'stop') {
 }
 const sleepMs = Math.min(Number(opt('sleep') ?? 0), 40_000)
 if (sleepMs > 0) await new Promise((r) => setTimeout(r, sleepMs))
+const killSelf = opt('kill-self')?.trim()
+if (killSelf) {
+  process.kill(process.pid, killSelf as NodeJS.Signals)
+  await new Promise((r) => setTimeout(r, 5000))
+}
 process.exit(Number(opt('exit-code') ?? 0))

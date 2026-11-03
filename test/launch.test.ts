@@ -47,6 +47,17 @@ describe('sb agents', () => {
     })
   })
 
+  test('com nome, a pasta atual não conta: dentro do root de OUTRO mux usa o root e o settings do mux nomeado', () => {
+    const sb = withDeep()
+    mkdirSync(join(rootBk(sb), 'sub', 'x'), { recursive: true })
+    const r = sb.runSb(['agents', 'bk'], { cwd: join(rootBk(sb), 'sub', 'x') })
+    expect(r.code).toBe(0)
+    expect(sb.calls().at(-1)!.argv).toEqual(['agents', '--cwd', rootBk(sb), '--settings', muxLink(sb.paths, 'bk')])
+    const other = sb.runSb(['agents', 'deep'], { cwd: rootBk(sb) })
+    expect(other.code).toBe(0)
+    expect(sb.calls().at(-1)!.argv).toEqual(['agents', '--cwd', join(rootBk(sb), 'sub'), '--settings', muxLink(sb.paths, 'deep')])
+  })
+
   test('sem nome deduz pela pasta: root mais profundo; fora de todo root → default', () => {
     const sb = withDeep()
     mkdirSync(join(rootBk(sb), 'sub', 'x'), { recursive: true })
@@ -173,11 +184,53 @@ describe('sb run', () => {
     expect(sb.calls().at(-1)!.argv).toEqual(['--version', '--settings', muxLink(sb.paths, 'deep')])
   })
 
-  test('tudo depois de `--` é do claude: --help, -h, --version, outro `--` e nomes de mux', () => {
+  test('tudo depois de `--` é do claude: --help, -h, --version e nomes de mux; o settings entra ANTES de um `--` interno', () => {
     const sb = populatedSandbox()
-    const rest = ['--help', '-h', '--version', '--', 'bk', '--json']
+    const link = muxLink(sb.paths, 'bk')
+    const rest = ['--help', '-h', '--version', 'bk', '--json']
     expect(sb.runSb(['run', 'bk', '--', ...rest]).code).toBe(0)
-    expect(sb.calls().at(-1)!.argv).toEqual([...rest, '--settings', muxLink(sb.paths, 'bk')])
+    expect(sb.calls().at(-1)!.argv).toEqual([...rest, '--settings', link])
+    // com `--` interno o que vem depois é posicional do claude: o --settings tem que ficar antes dele
+    expect(sb.runSb(['run', 'bk', '--', '--help', '--', 'bk', '--json']).code).toBe(0)
+    expect(sb.calls().at(-1)!.argv).toEqual(['--help', '--settings', link, '--', 'bk', '--json'])
+  })
+
+  test('`--` interno: -p -- "texto" não perde o settings (senão o claude cairia no keychain)', () => {
+    const sb = populatedSandbox()
+    const link = muxLink(sb.paths, 'bk')
+    expect(sb.runSb(['run', 'bk', '--', '-p', '--', '-x texto']).code).toBe(0)
+    expect(sb.calls().at(-1)!.argv).toEqual(['-p', '--settings', link, '--', '-x texto'])
+    expect(sb.runSb(['run', 'bk', '--', '--', 'foo']).code).toBe(0)
+    expect(sb.calls().at(-1)!.argv).toEqual(['--settings', link, '--', 'foo'])
+    // sem `--` interno: no fim, como antes
+    expect(sb.runSb(['run', 'bk', '--', '-p']).code).toBe(0)
+    expect(sb.calls().at(-1)!.argv).toEqual(['-p', '--settings', link])
+    // só o PRIMEIRO `--` conta; os seguintes e o texto `--settings` depois dele são do claude
+    expect(sb.runSb(['run', 'bk', '--', '-p', '--', 'a', '--', '--settings', 'b', '--settings=c']).code).toBe(0)
+    expect(sb.calls().at(-1)!.argv).toEqual(['-p', '--settings', link, '--', 'a', '--', '--settings', 'b', '--settings=c'])
+  })
+
+  test('launchArgs (puro): posição do --settings e recusa só antes do primeiro `--`', async () => {
+    const sb = populatedSandbox()
+    const cfg = await loadConfig(sb.paths)
+    const link = muxLink(sb.paths, 'bk')
+    const run = (args: string[]): string[] => launchArgs(cfg, sb.paths, { mux: 'bk', cwd: sb.dir, mode: 'run', args }).argv
+    expect(run([])).toEqual(['--settings', link])
+    expect(run(['-p', 'oi'])).toEqual(['-p', 'oi', '--settings', link])
+    expect(run(['-p', '--', 'x'])).toEqual(['-p', '--settings', link, '--', 'x'])
+    expect(run(['--', 'foo'])).toEqual(['--settings', link, '--', 'foo'])
+    expect(run(['--settings-file', 'y'])).toEqual(['--settings-file', 'y', '--settings', link])
+    expect(run(['--', '--settings', 'x'])).toEqual(['--settings', link, '--', '--settings', 'x'])
+    for (const bad of [['--settings', 'x'], ['--settings=x'], ['-p', '--settings', 'x', '--', 'y']]) {
+      expect(() => run(bad)).toThrow(SbError)
+      try {
+        run(bad)
+      } catch (e) {
+        expect((e as SbError).exit).toBe(EXIT.USAGE)
+      }
+    }
+    // agents não muda
+    expect(launchArgs(cfg, sb.paths, { mux: 'bk', cwd: sb.dir, mode: 'agents' }).argv).toEqual(['agents', '--cwd', rootBk(sb), '--settings', link])
   })
 
   test('`sb run --help` antes do `--` é a ajuda do sb (claude não é chamado)', () => {
@@ -203,6 +256,15 @@ describe('sb run', () => {
       expect(r.stderr).toContain('--settings')
     }
     expect(sb.calls()).toEqual([])
+  })
+
+  test('`--settings-file` e o texto `--settings` depois de um `--` interno NÃO são recusados', () => {
+    const sb = populatedSandbox()
+    const link = muxLink(sb.paths, 'bk')
+    expect(sb.runSb(['run', 'bk', '--', '--settings-file', 'y']).code).toBe(0)
+    expect(sb.calls().at(-1)!.argv).toEqual(['--settings-file', 'y', '--settings', link])
+    expect(sb.runSb(['run', 'bk', '--', '-p', '--', '--settings']).code).toBe(0)
+    expect(sb.calls().at(-1)!.argv).toEqual(['-p', '--settings', link, '--', '--settings'])
   })
 
   test('mux inexistente → exit 3; flag do sb sem `--` → exit 3', () => {
@@ -250,6 +312,9 @@ async function startSleepy(sb: Sandbox, args: string[]) {
   return { child, exited, fakePid: sb.calls()[0]!.pid! }
 }
 
+/** Listeners de `name` que apareceram depois de `old` (os que o `runClaude` registrou). */
+const added = (name: 'SIGINT' | 'SIGTERM', old: Array<(s: NodeJS.Signals) => void>) => (process.listeners(name) as Array<(s: NodeJS.Signals) => void>).filter((l) => !old.includes(l))
+
 const alive = (pid: number): boolean => {
   try {
     process.kill(pid, 0)
@@ -285,6 +350,64 @@ describe('sinais', () => {
       }
     })
   }
+
+  test('claude que morre por SIGUSR1/SIGUSR2: o sb sai por código 128+n e não reenvia o sinal (nada de inspetor)', () => {
+    for (const sig of ['SIGUSR1', 'SIGUSR2'] as const) {
+      const sb = populatedSandbox()
+      mkdirSync(sb.env.FAKE_CLAUDE_DIR!, { recursive: true })
+      writeFileSync(join(sb.env.FAKE_CLAUDE_DIR!, 'kill-self'), sig)
+      const r = sb.runSb(['run', 'bk', '--', '-p', 'oi'])
+      // o Bun nomeia mal alguns sinais no evento `exit` do filho (no macOS USR1 chega com outro nome, e o número muda):
+      // então só se checa que saiu por CÓDIGO >= 128 (nunca re-sinalizado: spawnSync daria -1) e sem inspetor
+      expect(r.code).toBeGreaterThanOrEqual(128)
+      expect(r.code).toBeLessThanOrEqual(128 + 64)
+      expect(r.stderr).not.toMatch(/Debugger|inspector/i)
+    }
+  })
+
+  test('o handler de sinal não toca process.stdin (no node isso deixaria o pipe do filho não bloqueante)', async () => {
+    const sb = populatedSandbox()
+    mkdirSync(sb.env.FAKE_CLAUDE_DIR!, { recursive: true })
+    writeFileSync(join(sb.env.FAKE_CLAUDE_DIR!, 'sleep'), '30000')
+    const cfg = await loadConfig(sb.paths)
+    const plan = launchArgs(cfg, sb.paths, { mux: 'bk', cwd: sb.dir, mode: 'run', args: [] })
+    const before = { INT: process.listeners('SIGINT') as Array<(s: NodeJS.Signals) => void>, TERM: process.listeners('SIGTERM') as Array<(s: NodeJS.Signals) => void> }
+    const running = runClaude(sb.ctx(), plan, { stdinIsTty: false })
+    while (sb.calls().length === 0) await new Promise((r) => setTimeout(r, 25))
+    const fakePid = sb.calls()[0]!.pid!
+    const desc = Object.getOwnPropertyDescriptor(process, 'stdin')
+    let touched = 0
+    Object.defineProperty(process, 'stdin', { configurable: true, get: () => (touched++, undefined) })
+    try {
+      for (const l of added('SIGINT', before.INT)) l('SIGINT')
+      expect(await running).toEqual({ signal: 'SIGINT' }) // sem terminal: repassado
+    } finally {
+      if (desc) Object.defineProperty(process, 'stdin', desc)
+      if (alive(fakePid)) process.kill(fakePid, 'SIGKILL')
+    }
+    expect(touched).toBe(0)
+  })
+
+  test('com terminal no stdin o SIGINT não é repassado (o terminal já o entrega); SIGTERM ainda é', async () => {
+    const sb = populatedSandbox()
+    mkdirSync(sb.env.FAKE_CLAUDE_DIR!, { recursive: true })
+    writeFileSync(join(sb.env.FAKE_CLAUDE_DIR!, 'sleep'), '30000')
+    const cfg = await loadConfig(sb.paths)
+    const plan = launchArgs(cfg, sb.paths, { mux: 'bk', cwd: sb.dir, mode: 'run', args: [] })
+    const before = { INT: process.listeners('SIGINT') as Array<(s: NodeJS.Signals) => void>, TERM: process.listeners('SIGTERM') as Array<(s: NodeJS.Signals) => void> }
+    const running = runClaude(sb.ctx(), plan, { stdinIsTty: true })
+    while (sb.calls().length === 0) await new Promise((r) => setTimeout(r, 25))
+    const fakePid = sb.calls()[0]!.pid!
+    try {
+      for (const l of added('SIGINT', before.INT)) l('SIGINT')
+      await new Promise((r) => setTimeout(r, 300))
+      expect(alive(fakePid)).toBe(true)
+      for (const l of added('SIGTERM', before.TERM)) l('SIGTERM')
+      expect(await running).toEqual({ signal: 'SIGTERM' })
+    } finally {
+      if (alive(fakePid)) process.kill(fakePid, 'SIGKILL')
+    }
+  })
 
   test('o mesmo vale para `sb agents`', async () => {
     const sb = populatedSandbox()
