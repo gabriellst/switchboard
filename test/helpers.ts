@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { defaultCtx, makeLog, type Ctx } from '../src/core/ctx.js'
@@ -37,6 +37,18 @@ export interface Sandbox {
   calls(): FakeCall[]
 }
 
+/**
+ * Diretórios criados por `sandbox()` neste processo: apagados no fim da suíte pelo gancho global de `test/setup.ts`
+ * (bunfig.toml: preload; `process.on('exit')` não dispara no `bun test`). Só eles, e só sob <tmpdir>/sb-test-*.
+ */
+const created: string[] = []
+const SANDBOX_PREFIX = join(realpathSync(tmpdir()), 'sb-test-')
+export function removeSandboxes(): void {
+  for (const d of created.splice(0)) {
+    if (d.startsWith(SANDBOX_PREFIX) && d.length > SANDBOX_PREFIX.length && !d.includes('..')) rmSync(d, { recursive: true, force: true })
+  }
+}
+
 const CLI = join(import.meta.dir, '..', 'src', 'cli.ts')
 const FAKE_CLAUDE = join(import.meta.dir, 'fake-claude.ts')
 
@@ -47,6 +59,7 @@ const FAKE_CLAUDE = join(import.meta.dir, 'fake-claude.ts')
  */
 export function sandbox(): Sandbox {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'sb-test-')))
+  created.push(dir)
   const home = join(dir, 'home')
   mkdirSync(home, { recursive: true })
   const env: Record<string, string> = {

@@ -32,12 +32,12 @@ export class AttachAfterLoginError extends SbError {
 const usage = (message: string, detail?: string): SbError => new SbError(message, EXIT.USAGE, detail)
 
 /** Porta de `limpar_ansi` (claude-conta): tira OSC e cores, movimento de cursor vira quebra de linha. */
-export function stripAnsi(raw: string): string {
+export function stripAnsi(raw: string, sep = ''): string {
   return raw
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC (títulos, links)
-    .replace(/\x1b\[[0-9;?]*[ -/]*m/g, '') // cores: somem
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, sep) // OSC (títulos, links)
+    .replace(/\x1b\[[0-9;?]*[ -/]*m/g, sep) // cores: somem (ou viram `sep`)
     .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '\n') // cursor: vira quebra
-    .replace(/\x1b./g, '')
+    .replace(/\x1b./g, sep)
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
 }
@@ -112,8 +112,8 @@ const alive = (pid: number): boolean => {
 }
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
-/** SIGTERM, até ~500 ms de espera, SIGKILL nos que sobraram. */
-async function killPids(pids: number[]): Promise<void> {
+/** SIGTERM, até ~500 ms de espera, SIGKILL nos que sobraram e nos que nasceram nesse meio tempo (`rescan`). */
+async function killPids(pids: number[], rescan: () => number[]): Promise<void> {
   const live = pids.filter(alive)
   for (const p of live) {
     try {
@@ -123,7 +123,8 @@ async function killPids(pids: number[]): Promise<void> {
     }
   }
   for (let i = 0; i < 10 && live.some(alive); i++) await sleep(50)
-  for (const p of live.filter(alive)) {
+  for (const p of new Set([...live, ...rescan()])) {
+    if (!alive(p)) continue
     try {
       process.kill(p, 'SIGKILL')
     } catch {
@@ -159,6 +160,7 @@ export async function runSetupToken(
   let child: ChildProcess | undefined
   let buf = ''
   let interrupted: string | undefined
+  let failure: unknown
   let stopNow: (() => void) | undefined
   const killGroup = (signal: NodeJS.Signals): void => {
     if (!child?.pid) return
@@ -203,15 +205,26 @@ export async function runSetupToken(
     const enter = (): void => void proc.stdin.write('\r')
     let timedOut = false
     let urlSent = false
-    /** A URL só vale inteira: o `\S+` final vai até o fim do buffer, então exige algo depois dela (o claude imprime \r\n). */
+    /**
+     * A URL só vale inteira: o `\S+` final vai até o fim do buffer, então exige algo depois dela (o claude imprime \r\n).
+     * Roda sobre um texto em que cores/OSC viram espaço (separam a URL do que vier depois) e nunca passa de um
+     * `sk-ant-` nem de um caractere de controle: o token jamais chega ao `onUrl`.
+     */
     const scanUrl = (final: boolean): void => {
       if (urlSent) return
-      const text = stripAnsi(buf)
+      const text = stripAnsi(buf, ' ')
       const m = URL_RE.exec(text)
-      if (m && (final || m.index + m[0].length < text.length)) {
-        urlSent = true
-        onUrl(m[0])
+      if (!m) return
+      let url = m[0]
+      let complete = final || m.index + url.length < text.length
+      const cut = url.search(/sk-ant-|[\x00-\x1f\x7f]/)
+      if (cut >= 0) {
+        url = url.slice(0, cut)
+        complete = true
       }
+      if (!complete || !URL_RE.test(url)) return
+      urlSent = true
+      onUrl(url)
     }
     const start = Date.now()
     const stopped = new Promise<void>((resolve) => {
@@ -223,9 +236,15 @@ export async function runSetupToken(
       }
       stopNow = done
       proc.stdout.on('data', (d: string) => {
-        buf += d
-        scanUrl(false)
-        if (!tokenAt && new RegExp(TOKEN_RE.source).test(stripAnsi(buf))) tokenAt = Date.now()
+        try {
+          buf += d
+          scanUrl(false)
+          if (!tokenAt && new RegExp(TOKEN_RE.source).test(stripAnsi(buf))) tokenAt = Date.now()
+        } catch (e) {
+          // `onUrl` falhou (EPIPE no stdout, EACCES no log...): a exceção não pode escapar do listener e pular o `finally`
+          failure ??= e
+          done()
+        }
       })
       const tick = setInterval(() => {
         const now = Date.now()
@@ -243,8 +262,9 @@ export async function runSetupToken(
       void exited.then(done)
     })
     await stopped // o `finally` abaixo encerra o processo e apaga o diretório
-    scanUrl(true) // fim da saída (ou limite): a URL que sobrou no fim do buffer é a inteira
+    if (failure !== undefined) throw failure
     if (interrupted) throw new LoginInterruptedError(interrupted)
+    scanUrl(true) // fim da saída (ou limite): a URL que sobrou no fim do buffer é a inteira
 
     const tokens = extractTokens(buf)
     if (tokens.length > 0) return tokens
@@ -255,7 +275,7 @@ export async function runSetupToken(
     if (end && end.code !== 0) throw new SbError(`o claude setup-token falhou (código ${end.code})`, EXIT.CLAUDE, '  confira se o `claude` está instalado e funciona')
     return []
   } finally {
-    for (const [sg, h] of handlers) process.off(sg, h)
+    // os handlers ficam até o fim da limpeza: um 2º sinal (Ctrl-C duplo) só repete o aviso, não mata o `sb` no meio dela
     if (child?.pid && running()) {
       const known = descendantsOf(child.pid) // enquanto o `script` vive dá para achar o claude (depois ele vira órfão)
       try {
@@ -265,7 +285,9 @@ export async function runSetupToken(
       }
       await waitClose(child, 300) // chance de sair sozinho
       // o claude vive noutra sessão: o kill do grupo não o alcança, então os descendentes morrem um a um
-      await killPids([...new Set([...known, ...(running() ? descendantsOf(child.pid) : [])])])
+      const pid = child.pid
+      const now = (): number[] => (running() ? descendantsOf(pid) : [])
+      await killPids([...new Set([...known, ...now()])], now)
       if (running()) {
         killGroup('SIGTERM')
         await waitClose(child, 3_000)
@@ -276,6 +298,7 @@ export async function runSetupToken(
       }
     }
     rmSync(tmp, { recursive: true, force: true })
+    for (const [sg, h] of handlers) process.off(sg, h)
   }
 }
 
@@ -382,7 +405,11 @@ export async function preflightLogin(ctx: Ctx, account: string, attach?: AttachS
 /** Outro login (PTY) em andamento: exit 5. */
 function loginBusy(ctx: Ctx, pid: number | undefined): SbError {
   const who = pid === undefined ? `trava ilegível: ${loginLockFile(ctx.paths)}` : `pid ${pid}`
-  return new SbError(`já tem um login em andamento (${who}); veja ${logFile(ctx.paths, 'login')}`, EXIT.LOCKED)
+  return new SbError(
+    `já tem um login em andamento (${who}); veja ${logFile(ctx.paths, 'login')}`,
+    EXIT.LOCKED,
+    `  se não há outro login em andamento, apague ${loginLockFile(ctx.paths)}`,
+  )
 }
 
 /** A conta precisa de login (não registrada ou sem token)? `keychain` nunca. */

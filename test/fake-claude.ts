@@ -9,6 +9,8 @@
 //   setup-token.exit       — (opcional) código de saída de `setup-token`
 //   setup-token.chunks     — (opcional) JSON com uma lista de textos: cada um é uma escrita, com 300 ms entre elas
 //                            (no lugar de setup-token.txt; serve para cortar a URL entre duas escritas)
+//   setup-token.spawn-on-term — (opcional) ignora SIGHUP; ao receber SIGTERM nasce um `sleep` filho (pid em pids.txt) e
+//                            o fake fica preso (no máximo 40 s)
 //   setup-token.hang-ignore-hup — (opcional) ignora SIGHUP/SIGTERM, grava o próprio pid e o de um `sleep` filho
 //                            em pids.txt e fica preso (no máximo 40 s: nunca sobra processo para sempre)
 // `agents`/`stop` entram na Task 14.
@@ -54,6 +56,16 @@ if (argv[0] === 'setup-token') {
       process.stdin.once('data', () => resolve())
       process.stdin.resume()
     })
+  }
+  if (opt('setup-token.spawn-on-term') !== null) {
+    process.on('SIGHUP', () => undefined)
+    process.on('SIGTERM', () => {
+      const child = Bun.spawn(['sleep', '40'], { stdio: ['ignore', 'ignore', 'ignore'] })
+      appendFileSync(join(dir, 'pids.txt'), `${child.pid}\n`)
+    })
+    appendFileSync(join(dir, 'pids.txt'), `${process.pid}\n`)
+    await new Promise((r) => setTimeout(r, 40_000))
+    process.exit(0)
   }
   if (opt('setup-token.hang-ignore-hup') !== null) {
     process.on('SIGHUP', () => undefined)

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { runLogin } from '../src/commands/login.js'
 import { loadConfig } from '../src/core/config.js'
@@ -222,6 +223,100 @@ describe('runSetupToken (claude falso, PTY via script)', () => {
     expect(readLog(sb)).toContain('FIM falhou')
     expect(existsSync(loginLockFile(sb.paths))).toBe(false)
     expect(existsSync(tokenFile(sb.paths, 'nova'))).toBe(false)
+  })
+
+
+  test('segundo sinal durante a limpeza não deixa tmp nem claude (processo real)', async () => {
+    const SRC = join(import.meta.dir, '..', 'src', 'core')
+    for (const [first, gapMs, second] of [['SIGINT', 150, 'SIGINT'], ['SIGINT', 300, 'SIGHUP']] as const) {
+      const sb = sandbox()
+      fake(sb, 'setup-token.sleep', '60000')
+      const runner = join(sb.dir, 'runner.ts')
+      writeFileSync(
+        runner,
+        `import { defaultCtx } from '${SRC}/ctx.js'\nimport { runSetupToken } from '${SRC}/login.js'\n` +
+          `try { await runSetupToken(defaultCtx(process.env), () => undefined, 60000) } catch (e) { console.log('ERR', (e as Error).name) }\n`,
+      )
+      const child = spawn(process.execPath, [runner], { env: sb.env, stdio: ['ignore', 'pipe', 'pipe'] })
+      const closed = new Promise<number | null>((resolve) => child.once('close', resolve))
+      try {
+        await waitFor(() => sb.calls().length === 1)
+        await sleep(300)
+        child.kill(first)
+        await sleep(gapMs)
+        child.kill(second)
+        await Promise.race([closed, sleep(15_000)])
+        const c = sb.calls()[0]!
+        expect(existsSync(c.configDir!)).toBe(false)
+        await waitFor(() => !alive(c.pid!), 3_000)
+      } finally {
+        child.kill('SIGKILL')
+        const c = sb.calls()[0]
+        if (c?.pid) {
+          try {
+            process.kill(c.pid, 'SIGKILL')
+          } catch {
+            // já morreu
+          }
+        }
+        if (c?.configDir) rmSync(c.configDir, { recursive: true, force: true })
+      }
+    }
+  })
+
+  test('URL seguida só de cores e depois o token (sem quebra): onUrl recebe só a URL', async () => {
+    const sb = sandbox()
+    fake(sb, 'setup-token.chunks', JSON.stringify([`\x1b[36m${URL_LINE}\x1b[0m`, `\x1b[32m${FAKE_TOKEN}`]))
+    const urls: string[] = []
+    const tokens = await runSetupToken(sb.ctx(), (u) => urls.push(u))
+    expect(urls).toEqual([URL_LINE])
+    expect(tokens).toEqual([FAKE_TOKEN])
+  })
+
+  test('URL colada no token, sem separador nenhum: onUrl nunca recebe `sk-ant-`', async () => {
+    const sb = sandbox()
+    fake(sb, 'setup-token.chunks', JSON.stringify([URL_LINE + FAKE_TOKEN]))
+    const urls: string[] = []
+    await runSetupToken(sb.ctx(), (u) => urls.push(u))
+    expect(urls).toHaveLength(1)
+    expect(urls[0]).not.toMatch(/sk-ant-/)
+    expect(urls[0]).toBe(URL_LINE)
+  })
+
+  test('filho que nasce no handler de SIGTERM (e ignora sinais) também morre', async () => {
+    const sb = sandbox()
+    fake(sb, 'setup-token.spawn-on-term', '1')
+    const pidsFile = join(sb.env.FAKE_CLAUDE_DIR!, 'pids.txt')
+    const recorded = (): number[] => (existsSync(pidsFile) ? readFileSync(pidsFile, 'utf8').split('\n').filter(Boolean).map(Number) : [])
+    try {
+      const r = await exitOf(runSetupToken(sb.ctx(), () => undefined, 1_500))
+      expect(r?.exit).toBe(EXIT.CLAUDE)
+      const pids = recorded()
+      expect(pids.length).toBeGreaterThanOrEqual(2) // o fake + o filho do handler
+      await waitFor(() => pids.every((p) => !alive(p)), 3_000)
+    } finally {
+      for (const p of recorded()) {
+        try {
+          process.kill(p, 'SIGKILL')
+        } catch {
+          // já morreu
+        }
+      }
+    }
+  })
+
+  test('onUrl que lança: a execução rejeita pela limpeza normal (tmp apagado, claude morto)', async () => {
+    const sb = sandbox()
+    fakeOutput(sb)
+    fake(sb, 'setup-token.sleep', '60000')
+    const boom = new Error('EPIPE simulado')
+    const err = await runSetupToken(sb.ctx(), () => {
+      throw boom
+    }).catch((e: unknown) => e)
+    expect(err).toBe(boom)
+    const c = sb.calls()[0]!
+    expect(existsSync(c.configDir!)).toBe(false)
+    await waitFor(() => !alive(c.pid!), 3_000)
   })
 
   test('sem URL: manda Enter (\\r) e o claude falso, que esperava, segue', async () => {
@@ -484,6 +579,20 @@ describe('trava de login em andamento (login.pid)', () => {
     expect(r?.exit).toBe(EXIT.LOCKED)
     expect(sb.calls()).toEqual([])
     rmSync(loginLockFile(sb.paths), { recursive: true })
+  })
+
+  test('trava = symlink quebrado: recusa (exit 5) também no pai desanexado, sem spawnar; mensagem diz o que apagar', async () => {
+    const sb = withRef()
+    fakeOutput(sb)
+    const f = loginLockFile(sb.paths)
+    mkdirSync(dirname(f), { recursive: true })
+    symlinkSync(join(sb.dir, 'nao-existe'), f)
+    const r = await sb.runSbAsync(['login', 'nova'])
+    expect(r.code).toBe(5)
+    expect(r.stderr).toContain('apague')
+    expect(r.stderr).toContain('login.pid')
+    expect(sb.calls()).toEqual([])
+    expect(readLog(sb)).toBe('')
   })
 
   test('o pai desanexado recusa ANTES de spawnar o filho (exit 5, log intocado)', async () => {

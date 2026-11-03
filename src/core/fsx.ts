@@ -102,8 +102,15 @@ function inspect(file: string): LockState {
     text = readFileSync(file, 'utf8')
     ageMs = Date.now() - statSync(file).mtimeMs
   } catch (e) {
-    // só ENOENT é "sumiu"; qualquer outro erro (EACCES, EISDIR...) é lock que não dá para julgar: conta como preso
-    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'gone' } : { kind: 'unknown' }
+    // só ENOENT é "sumiu"; qualquer outro erro (EACCES, EISDIR...) é lock que não dá para julgar: conta como preso.
+    // Symlink quebrado também dá ENOENT na leitura, mas o caminho existe (o `wx` do create recusa): é "unknown", não "gone".
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return { kind: 'unknown' }
+    try {
+      lstatSync(file)
+      return { kind: 'unknown' }
+    } catch {
+      return { kind: 'gone' }
+    }
   }
   const pid = /^\d+$/.test(text.trim()) ? Number(text.trim()) : 0
   if (pid > 0) return isAlive(pid) ? { kind: 'live', pid } : { kind: 'stale' }
