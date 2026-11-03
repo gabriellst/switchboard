@@ -1,12 +1,19 @@
 #!/usr/bin/env node
 import { defineCommand, runMain } from 'citty'
+import { usageArgs } from './commands/args.js'
 import { EXIT, SbError } from './core/errors.js'
 
 const main = defineCommand({
   meta: { name: 'sb', version: '0.1.0', description: 'Contas do Claude Code por pasta, com troca automática ao bater o limite' },
-  // Subcomandos entram nas tasks seguintes, carregados sob demanda:
-  //   status: () => import('./commands/status.js').then((m) => m.default),
-  subCommands: {},
+  // `sb` sem subcomando = `sb usage`; os args do usage ficam aqui também para o citty saber que
+  // `--every 30` leva valor (senão tomaria o "30" por nome de subcomando).
+  args: usageArgs,
+  default: 'usage',
+  // Subcomandos carregados sob demanda
+  subCommands: {
+    usage: () => import('./commands/usage.js').then((m) => m.default),
+    accounts: () => import('./commands/accounts.js').then((m) => m.default),
+  },
 })
 
 runMain(main).catch((e: unknown) => {

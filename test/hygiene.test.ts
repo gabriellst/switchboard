@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { readFileSync, statSync } from 'node:fs'
 import { filesUnder, FAKE_TOKEN, populatedSandbox } from './helpers.js'
 
-const CASES: string[][] = [['--version']] // cada task que cria comando acrescenta casos
+const CASES: string[][] = [['--version'], [], ['usage', '--json'], ['accounts', '--json']] // cada task que cria comando acrescenta casos
 
 test.each(CASES)('sem token na saída: sb %p', (...args) => {
   const sb = populatedSandbox() // config + tokens FAKE_TOKEN + usage + jobs (cresce com as tasks)

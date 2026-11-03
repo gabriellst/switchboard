@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -19,6 +19,8 @@ export interface Sandbox {
   paths: Paths
   ctx(over?: Partial<Ctx>): Ctx
   runSb(args: string[], opts?: { env?: Record<string, string>; cwd?: string; input?: string }): { code: number; stdout: string; stderr: string }
+  /** Como `runSb`, mas sem bloquear o event loop: serve quando o teste hospeda um `fakeApi` no mesmo processo. */
+  runSbAsync(args: string[], opts?: { env?: Record<string, string>; cwd?: string }): Promise<{ code: number; stdout: string; stderr: string }>
   /** Grava `tokens/<conta>.json` (600) direto, sem passar pelo código sob teste. */
   addToken(account: string, token?: string): void
   calls(): FakeCall[]
@@ -72,6 +74,17 @@ export function sandbox(): Sandbox {
       })
       return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }
     },
+    runSbAsync(args, opts = {}) {
+      return new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, [CLI, ...args], { env: { ...env, ...opts.env }, cwd: opts.cwd ?? dir, stdio: ['ignore', 'pipe', 'pipe'] })
+        let stdout = ''
+        let stderr = ''
+        child.stdout.on('data', (c: Buffer) => (stdout += c.toString('utf8')))
+        child.stderr.on('data', (c: Buffer) => (stderr += c.toString('utf8')))
+        child.on('error', reject)
+        child.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }))
+      })
+    },
     addToken(account, token = FAKE_TOKEN) {
       const file = tokenFile(resolvePaths(env), account)
       mkdirSync(join(file, '..'), { recursive: true, mode: 0o700 })
@@ -98,16 +111,25 @@ export function populatedSandbox(): Sandbox {
   mkdirSync(join(p.configFile, '..'), { recursive: true })
   writeFileSync(
     p.configFile,
-    '{ "switchboard": 1, "accounts": { "gabriel": {}, "admin1": {} }, "mux": { "bk": { "root": "~/bk", "account": "gabriel", "accounts": ["gabriel", "admin1"], "pool": ["gabriel", "admin1"] } } }\n',
+    '{ "switchboard": 1, "accounts": { "gabriel": {}, "admin1": {} }, "default": "bk", "mux": { "bk": { "root": "~/bk", "account": "gabriel", "accounts": ["gabriel", "admin1"], "pool": ["gabriel", "admin1"] } } }\n',
   )
   for (const d of ['', 'tokens', 'mux', 'pins', 'log', 'backup']) mkdirSync(join(p.stateDir, d), { recursive: true, mode: 0o700 })
   for (const a of ['gabriel', 'admin1']) {
     writeFileSync(tokenFile(p, a), JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: FAKE_TOKEN } }), { mode: 0o600 })
     chmodSync(tokenFile(p, a), 0o600)
   }
+  // formato real do usage.json (`UsageFile`: latest/previous/groups); medida antiga o bastante para a sonda refazer
+  const measured = (five: number, seven: number): Record<string, unknown> => ({
+    ok: true,
+    fiveHour: { utilization: five, resetsAt: 1_700_010_000, status: 'allowed' },
+    sevenDay: { utilization: seven, resetsAt: 1_700_300_000, status: 'allowed' },
+    status: 'allowed',
+    resetsAt: 1_700_010_000,
+    measuredAt: 1_700_000_000_000,
+  })
   writeFileSync(
     usageFile(p),
-    JSON.stringify({ gabriel: { fiveHour: 0.4, sevenDay: 0.1, status: 'allowed', measuredAt: 1_793_700_000_000 } }) + '\n',
+    JSON.stringify({ latest: { gabriel: measured(0.4, 0.1), admin1: measured(0.2, 0.3) }, previous: {}, groups: [] }) + '\n',
   )
   mkdirSync(join(p.jobsDir, 'job1'), { recursive: true })
   writeFileSync(join(p.jobsDir, 'job1', 'state.json'), JSON.stringify({ id: 'job1', status: 'idle', flags: [] }) + '\n')

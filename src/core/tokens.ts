@@ -67,3 +67,27 @@ export function loadSecret(paths: Paths, account: string): string | null {
 export function hasToken(paths: Paths, account: string): boolean {
   return readToken(paths, account) !== null
 }
+
+export type TokenStatus = 'ok' | 'missing' | 'invalid-json'
+
+/**
+ * Estado do arquivo de token, sem expor o valor: `missing` (sem arquivo, ou sem token dentro),
+ * `invalid-json` (arquivo ilegível ou de outra forma) ou `ok`. `keychain` nunca guarda token → `missing`.
+ */
+export function tokenStatus(paths: Paths, account: string): TokenStatus {
+  if (account === KEYCHAIN) return 'missing'
+  let text: string
+  try {
+    text = readFileSync(tokenFile(paths, account), 'utf8')
+  } catch {
+    return 'missing'
+  }
+  let raw: unknown
+  try {
+    raw = JSON.parse(text)
+  } catch {
+    return 'invalid-json'
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return 'invalid-json'
+  return readToken(paths, account) === null ? 'missing' : 'ok'
+}
