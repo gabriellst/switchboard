@@ -48,24 +48,39 @@ export interface MuxEval {
 }
 
 /**
- * Conta que o mux deve usar agora (puro). Ordem das regras (design §4):
+ * Conta que o mux deve usar agora (puro: sem relógio, sem I/O, sem mutar a entrada).
+ *
+ * `stay(c)` = `c ∈ mux.accounts` e `availability(c) ≠ 'exhausted'`. Medição `unknown` (falha da NOSSA
+ * sonda: rede, 5xx, sem medição) nunca, sozinha, tira o mux de um lugar válido: parar sessões por um
+ * erro nosso custaria duas paradas. Só `exhausted` (medido, 429, token morto) empurra.
  *
  * 1. pool vazio → current (nunca troca sozinho).
- * 2. override ativo (`nowMs < until`): disponível → ele; senão pula para 5 tratando a preferida como esgotada.
- * 3. sem override e a preferida não está esgotada (unknown conta como ok; `returning` quando
- *    current ≠ pref): `!returnOnReset` e current ≠ pref e current no pool e disponível → fica (sticky);
- *    senão a preferida.
+ * 2. override ativo (`nowMs < until`; `until` é em MILISSEGUNDOS):
+ *    disponível → ele; `unknown` e current == override → current ('override');
+ *    senão (esgotado, ou unknown com current ≠ override) o override é ANULADO e segue a regra normal
+ *    (a preferida volta a valer).
+ * 3. preferida: `R` = current ≠ pref, current ∈ accounts e current ∉ groupOf(pref) ("reserva": só ela
+ *    tem histerese no retorno; duplicata da preferida ou current fora de accounts não é reserva).
+ *    `pa = availability(pref, { returning: R })`.
+ *    - current == pref ou duplicata dela: `pa ≠ exhausted` → fica ('preferred');
+ *    - senão: pa available → (`!returnOnReset` e current ∈ pool e available) 'sticky', senão pref;
+ *             pa unknown   → `stay(current)` ? current 'sticky' (sem evidência para sair) : pref;
+ *             pa exhausted → segue.
  * 4. preferida esgotada e fora do pool → fica nela, com aviso.
- * 5. `current` se já é destino válido (no pool, ≠ preferida e não duplicata dela, `available`);
- *    senão a 1ª conta do pool, na ordem, que não seja da preferida (nem duplicata dela), sem repetir
- *    grupo de duplicatas, e disponível. Destinos usam `availability` SEM histerese.
- * 6. nenhuma → current, ou a preferida se current não está em `mux.accounts`; com aviso.
+ * 5. `current` se já é destino válido (∈ pool, ≠ pref, ∉ groupOf(pref), `availability ≠ exhausted`:
+ *    available OU unknown, sem histerese) → fica ('pool'; trocar custa parar sessões, e a ordem do
+ *    pool escolhe destino, não faz saltar entre reservas). Senão a 1ª conta do pool, na ordem, fora do
+ *    grupo da preferida, sem repetir grupo, `available` (destino: só available, sem histerese).
+ * 5b. `availability(pref)` sem histerese == available → pref. Nunca ficar numa conta esgotada ou morta
+ *    com a preferida utilizável: a histerese segura uma reserva ainda usável, não uma esgotada.
+ * 6. nenhuma → current, ou a preferida se current ∉ mux.accounts; com aviso.
  *
  * Decisões onde o brief é silencioso:
- * - `current` fora de `mux.accounts` só importa no passo 6 (vira a preferida); em 'no-pool' devolve-se
- *   `current` como veio, porque "nunca troca sozinho".
- * - Grupo é marcado como visto ao ser visitado, disponível ou não: as cópias partilham a medição.
- * - O destino do passo 5 é a própria conta `c` visitada (não o representante do grupo).
+ * - current duplicata da preferida conta como a própria preferida e é mantida (mesma conta, sem troca).
+ * - current ∉ mux.accounts só importa nos passos 3 (não é reserva, sem histerese) e 6; em 'no-pool'
+ *   devolve-se current como veio ("nunca troca sozinho").
+ * - Grupo é marcado visto ao ser visitado, disponível ou não (as cópias partilham a medição); o
+ *   destino do passo 5 é a própria conta visitada, não o representante.
  */
 export function desiredAccount(input: {
   name: string
@@ -73,6 +88,7 @@ export function desiredAccount(input: {
   current: string
   usage: UsageFile
   swap: SwapConfig
+  /** `until` em MILISSEGUNDOS desde a época (compara com `nowMs`) */
   override?: { account: string; until: number }
   nowMs: number
 }): MuxEval {
@@ -82,19 +98,34 @@ export function desiredAccount(input: {
   const pool = [...new Set(mux.pool)]
   const avail = (account: string, returning = false): Availability =>
     availability(usage.latest[account], th, nowMs, { returning })
+  const stay = (c: string): boolean => mux.accounts.includes(c) && avail(c) !== 'exhausted'
   const done = (desired: string, reason: MuxEval['reason'], warn?: string): MuxEval =>
     warn === undefined ? { mux: name, current, desired, reason } : { mux: name, current, desired, reason, warn }
 
   if (pool.length === 0) return done(current, 'no-pool')
 
-  const overrideActive = override !== undefined && nowMs < override.until
-  if (overrideActive) {
-    if (avail(override.account) === 'available') return done(override.account, 'override')
-    // override esgotado: cai para o passo 5 com a preferida tratada como esgotada
-  } else if (avail(pref, current !== pref) !== 'exhausted') {
-    const sticky = !swap.returnOnReset && current !== pref && pool.includes(current) && avail(current) === 'available'
+  let voided: string | undefined // override ativo que não pôde valer
+  if (override !== undefined && nowMs < override.until) {
+    const oa = avail(override.account)
+    if (oa === 'available') return done(override.account, 'override')
+    if (oa === 'unknown' && current === override.account) return done(current, 'override')
+    voided = override.account
+  }
+
+  const prefGroup = groupOf(usage, pref)
+  const prefLike = current === pref || prefGroup.includes(current)
+  const reserve = !prefLike && mux.accounts.includes(current)
+  const pa = avail(pref, reserve)
+  if (prefLike) {
+    if (pa !== 'exhausted') return done(current, 'preferred')
+  } else if (pa === 'available') {
+    const sticky = !swap.returnOnReset && pool.includes(current) && avail(current) === 'available'
     return sticky ? done(current, 'sticky') : done(pref, 'preferred')
-  } else if (!pool.includes(pref)) {
+  } else if (pa === 'unknown') {
+    return stay(current) ? done(current, 'sticky') : done(pref, 'preferred')
+  }
+
+  if (!pool.includes(pref)) {
     return done(
       pref,
       'preferred-outside-pool',
@@ -102,14 +133,7 @@ export function desiredAccount(input: {
     )
   }
 
-  const prefGroup = groupOf(usage, pref)
-  // Sem salto entre reservas: cada troca custa parar e reabrir sessões, e a ordem do pool serve para
-  // ESCOLHER destino, não para pular quando uma reserva anterior se recupera. Se `current` já é um
-  // destino válido (no pool, não é a preferida nem duplicata dela, e `available` sem histerese),
-  // fica nela (reason 'pool', desired === current). `unknown` NÃO vale como válida aqui: uma reserva
-  // com erro de rede só é deixada se outra estiver `available`; se nenhuma estiver, o passo 6
-  // ('none-available') mantém `current`.
-  if (current !== pref && pool.includes(current) && !prefGroup.includes(current) && avail(current) === 'available') {
+  if (current !== pref && pool.includes(current) && !prefGroup.includes(current) && avail(current) !== 'exhausted') {
     return done(current, 'pool')
   }
   const seen = new Set<string>()
@@ -121,9 +145,13 @@ export function desiredAccount(input: {
     if (avail(c) === 'available') return done(c, 'pool')
   }
 
-  return done(
-    mux.accounts.includes(current) ? current : pref,
-    'none-available',
-    `Mux "${name}": nenhuma conta do pool está disponível; permanece na conta atual.`,
-  )
+  if (avail(pref) === 'available') return done(pref, 'preferred')
+
+  const desired = mux.accounts.includes(current) ? current : pref
+  const cause = voided === undefined ? '' : `o override em "${voided}" não está utilizável e `
+  const outcome =
+    desired === current
+      ? `permanece em "${current}".`
+      : `a conta atual "${current}" não pertence ao mux; usa a preferida "${pref}".`
+  return done(desired, 'none-available', `Mux "${name}": ${cause}nenhuma conta está disponível (preferida e pool); ${outcome}`)
 }

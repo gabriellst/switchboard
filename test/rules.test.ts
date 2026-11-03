@@ -188,11 +188,12 @@ describe('desiredAccount', () => {
   })
   test('destino com erro de rede (unknown) também é pulado', () => {
     const latest = { gabriel: mk(0.95, 0.1), admin1: err('network') }
-    expect(eval_(latest).reason).toBe('none-available')
+    expect(eval_(latest)).toMatchObject({ desired: 'gabriel', reason: 'none-available' })
   })
   test('preferida sem medição fica (unknown conta como ok)', () => {
     expect(eval_({ admin1: mk(0.2, 0.3) })).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
-    expect(eval_({ admin1: mk(0.2, 0.3) }, { current: 'admin1' })).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
+    // FLIPPED (revisão): em reserva válida, preferida sem medição (falha nossa) não tira o mux dela
+    expect(eval_({ admin1: mk(0.2, 0.3) }, { current: 'admin1' })).toMatchObject({ desired: 'admin1', reason: 'sticky' })
   })
   test('nenhuma disponível → fica na atual com aviso', () => {
     const r = eval_({ gabriel: mk(0.95, 0.1), admin1: mk(0.95, 0.1) }, { current: 'admin1' })
@@ -215,13 +216,18 @@ describe('desiredAccount', () => {
       const latest = { gabriel: mk(0.95, 0.1), admin1: mk(0.2, 0.2), outra: mk(0.95, 0.3) }
       expect(eval_(latest, { mux, current: 'outra' })).toMatchObject({ desired: 'admin1', reason: 'pool' })
     })
-    test('atual sem medição (unknown) não é mantida se outra está disponível', () => {
+    // FLIPPED (revisão): `unknown` na reserva atual (timeout da sonda) não causa troca sozinho
+    test('atual com timeout único (unknown) e outras disponíveis → fica (passo 5)', () => {
       const latest = { gabriel: mk(0.95, 0.1), admin1: mk(0.2, 0.2), outra: err('network') }
-      expect(eval_(latest, { mux, current: 'outra' })).toMatchObject({ desired: 'admin1', reason: 'pool' })
+      expect(eval_(latest, { mux, current: 'outra' })).toMatchObject({ desired: 'outra', reason: 'pool' })
     })
-    test('atual unknown e nenhuma outra disponível → none-available mantém a atual', () => {
+    test('atual unknown e nenhuma outra disponível → fica', () => {
       const latest = { gabriel: mk(0.95, 0.1), admin1: mk(0.95, 0.2), outra: err('network') }
-      expect(eval_(latest, { mux, current: 'outra' })).toMatchObject({ desired: 'outra', reason: 'none-available' })
+      expect(eval_(latest, { mux, current: 'outra' })).toMatchObject({ desired: 'outra', reason: 'pool' })
+    })
+    test('atual sem nenhuma medição (undefined) também fica', () => {
+      const latest = { gabriel: mk(0.95, 0.1), admin1: mk(0.2, 0.2) }
+      expect(eval_(latest, { mux, current: 'outra' })).toMatchObject({ desired: 'outra', reason: 'pool' })
     })
     test('atual que é duplicata da preferida não é mantida', () => {
       const latest = { gabriel: mk(0.95, 0.1), admin1: mk(0.2, 0.2), outra: mk(0.1, 0.1) }
@@ -245,10 +251,27 @@ describe('desiredAccount', () => {
       expect(eval_({ gabriel: err('rate-limited'), admin1: mk(0.2, 0.3) }, { current: 'admin1' })).toMatchObject({ desired: 'admin1', reason: 'pool' })
       expect(eval_({ gabriel: mk(0.2, 0.2), admin1: mk(0.2, 0.3) }, { current: 'admin1' })).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
     })
-    test('network / unexpected na preferida → fica (unknown)', () => {
+    // FLIPPED (revisão): na reserva válida, a preferida unknown não puxa de volta
+    test('network / unexpected na preferida → fica onde está (unknown)', () => {
       for (const e of ['network', 'unexpected'] as const) {
         expect(eval_({ gabriel: err(e), admin1: mk(0.2, 0.3) })).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
-        expect(eval_({ gabriel: err(e), admin1: mk(0.2, 0.3) }, { current: 'admin1' })).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
+        expect(eval_({ gabriel: err(e), admin1: mk(0.2, 0.3) }, { current: 'admin1' })).toMatchObject({ desired: 'admin1', reason: 'sticky' })
+      }
+    })
+    test('network na preferida, atual reserva esgotada → volta à preferida (não há lugar válido)', () => {
+      expect(eval_({ gabriel: err('network'), admin1: mk(0.95, 0.3) }, { current: 'admin1' })).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
+    })
+    test('rate-limited na preferida: só volta com medição ok abaixo do limiar − 0.10', () => {
+      const at = (g: Measurement) => eval_({ gabriel: g, admin1: mk(0.2, 0.3) }, { current: 'admin1' })
+      expect(at(err('rate-limited'))).toMatchObject({ desired: 'admin1', reason: 'pool' })
+      expect(at(mk(0.85, 0.1))).toMatchObject({ desired: 'admin1', reason: 'pool' })
+      expect(at(mk(0.79, 0.1))).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
+    })
+    test('TODAS as sondas falhando (tudo unknown) → nenhum mux se move', () => {
+      const down = { gabriel: err('network'), admin1: err('unexpected'), 'cliente-x': err('network') }
+      for (const current of ['gabriel', 'admin1', 'cliente-x']) {
+        expect(eval_(down, { current }).desired).toBe(current)
+        expect(eval_({}, { current }).desired).toBe(current)
       }
     })
   })
@@ -259,21 +282,37 @@ describe('desiredAccount', () => {
       const r = eval_({ gabriel: mk(0.1, 0.1), admin1: mk(0.2, 0.3) }, { override: { account: 'admin1', until: future } })
       expect(r).toMatchObject({ desired: 'admin1', reason: 'override' })
     })
-    test('override esgotado → fila sem a preferida', () => {
+    // FLIPPED (revisão): override esgotado é anulado e vale a regra normal (a preferida volta a valer)
+    test('override esgotado → regra normal: preferida disponível vence', () => {
       const mux = { pool: ['gabriel', 'admin1', 'extra'], accounts: ['gabriel', 'admin1', 'extra'] }
       const latest = { gabriel: mk(0.1, 0.1), admin1: mk(0.95, 0.3), extra: mk(0.2, 0.2) }
-      const r = eval_(latest, { mux, override: { account: 'admin1', until: future } })
+      const r = eval_(latest, { mux, current: 'admin1', override: { account: 'admin1', until: future } })
+      expect(r).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
+    })
+    test('override esgotado e preferida esgotada → 1ª disponível da fila', () => {
+      const mux = { pool: ['gabriel', 'admin1', 'extra'], accounts: ['gabriel', 'admin1', 'extra'] }
+      const latest = { gabriel: mk(0.95, 0.1), admin1: mk(0.95, 0.3), extra: mk(0.2, 0.2) }
+      const r = eval_(latest, { mux, current: 'admin1', override: { account: 'admin1', until: future } })
       expect(r).toMatchObject({ desired: 'extra', reason: 'pool' })
     })
-    test('override esgotado e fila vazia → none-available, nunca a preferida por reason pool', () => {
-      const latest = { gabriel: mk(0.1, 0.1), admin1: mk(0.95, 0.3) }
+    test('override esgotado e nada disponível → fica na atual com aviso (sem culpar só o pool)', () => {
+      const latest = { gabriel: mk(0.95, 0.1), admin1: mk(0.95, 0.3) }
       const r = eval_(latest, { current: 'admin1', override: { account: 'admin1', until: future } })
       expect(r).toMatchObject({ desired: 'admin1', reason: 'none-available' })
-      expect(r.warn).toBeString()
+      expect(r.warn).toContain('override')
+      expect(r.warn).toContain('permanece em "admin1"')
     })
-    test('override sem medição (unknown) não vale', () => {
+    test('override unknown e atual == override → fica (reason override)', () => {
+      const r = eval_({ gabriel: mk(0.1, 0.1), admin1: err('network') }, { current: 'admin1', override: { account: 'admin1', until: future } })
+      expect(r).toMatchObject({ desired: 'admin1', reason: 'override' })
+    })
+    test('override sem medição e atual ≠ override → anulado, regra normal', () => {
       const r = eval_({ gabriel: mk(0.1, 0.1) }, { current: 'gabriel', override: { account: 'admin1', until: future } })
-      expect(r.reason).not.toBe('override')
+      expect(r).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
+    })
+    test('override unknown, atual ≠ override, na reserva válida → regra normal (sticky na reserva)', () => {
+      const r = eval_({ gabriel: err('network'), admin1: mk(0.2, 0.2) }, { current: 'admin1', override: { account: 'cliente-x', until: future } })
+      expect(r).toMatchObject({ desired: 'admin1', reason: 'sticky' })
     })
     test('override vencido → preferida (inclusive até == agora)', () => {
       const latest = { gabriel: mk(0.1, 0.1), admin1: mk(0.2, 0.3) }
@@ -307,5 +346,112 @@ describe('desiredAccount', () => {
       const r = eval_({ gabriel: mk(0.1, 0.1) }, { current: 'gabriel', returnOnReset: false })
       expect(r).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
     })
+  })
+})
+
+describe('desiredAccount — nunca ficar numa conta esgotada com a preferida utilizável (5b)', () => {
+  const mux = { pool: ['gabriel', 'admin1'], accounts: ['gabriel', 'admin1', 'cliente-x'] }
+  test('atual a 95%, preferida a 85% (histerese a segurava) → preferida', () => {
+    const r = eval_({ gabriel: mk(0.85, 0.1), admin1: mk(0.95, 0.1) }, { mux, current: 'admin1' })
+    expect(r).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
+  })
+  test('atual com token morto → preferida a 85%', () => {
+    const r = eval_({ gabriel: mk(0.85, 0.1), admin1: err('dead-token') }, { mux, current: 'admin1' })
+    expect(r).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
+  })
+  test('override vencido numa atual esgotada → preferida a 85%', () => {
+    const r = eval_({ gabriel: mk(0.85, 0.1), admin1: mk(0.95, 0.1) }, { mux, current: 'admin1', override: { account: 'admin1', until: NOW - 1 } })
+    expect(r).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
+  })
+  test('atual em accounts mas fora do pool e esgotada → preferida a 85%', () => {
+    const r = eval_({ gabriel: mk(0.85, 0.1), admin1: mk(0.95, 0.1), 'cliente-x': mk(0.99, 0.1) }, { mux, current: 'cliente-x' })
+    expect(r).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
+  })
+  test('preferida a 85% e reserva atual ainda boa → fica (a histerese continua valendo)', () => {
+    const r = eval_({ gabriel: mk(0.85, 0.1), admin1: mk(0.2, 0.1) }, { mux, current: 'admin1' })
+    expect(r).toMatchObject({ desired: 'admin1', reason: 'pool' })
+  })
+  test('preferida esgotada de fato → 5b não dispara', () => {
+    const r = eval_({ gabriel: mk(0.95, 0.1), admin1: mk(0.95, 0.1) }, { mux, current: 'admin1' })
+    expect(r).toMatchObject({ desired: 'admin1', reason: 'none-available' })
+  })
+})
+
+describe('desiredAccount — destinos não têm histerese; duplicata e fora do registro não são "reserva"', () => {
+  test.each([0.8, 0.85, 0.89])('reserva a %p é escolhida como destino', (u) => {
+    expect(eval_({ gabriel: mk(0.95, 0.1), admin1: mk(u, 0.1) })).toMatchObject({ desired: 'admin1', reason: 'pool' })
+  })
+  test('atual duplicata da preferida: sem histerese de retorno e tratada como a própria preferida', () => {
+    const mux = { pool: ['gabriel', 'outra', 'admin1'], accounts: ['gabriel', 'outra', 'admin1'] }
+    const r = eval_({ gabriel: mk(0.85, 0.1), outra: mk(0.85, 0.1), admin1: mk(0.1, 0.1) }, { mux, current: 'outra', groups: [['gabriel', 'outra']] })
+    expect(r).toMatchObject({ desired: 'outra', reason: 'preferred' })
+  })
+  test('atual fora de mux.accounts: sem histerese de retorno (preferida a 85% vale)', () => {
+    const r = eval_({ gabriel: mk(0.85, 0.1), admin1: mk(0.1, 0.1) }, { current: 'estranha' })
+    expect(r).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
+  })
+  test('aviso de none-available: "permanece em" só quando desired == current', () => {
+    const stuck = eval_({ gabriel: mk(0.95, 0.1), admin1: mk(0.95, 0.1) }, { current: 'admin1' })
+    expect(stuck.warn).toContain('permanece em "admin1"')
+    const outside = eval_({ gabriel: mk(0.95, 0.1), admin1: mk(0.95, 0.1) }, { current: 'estranha' })
+    expect(outside.desired).toBe('gabriel')
+    expect(outside.warn).not.toContain('permanece')
+    expect(outside.warn).toContain('estranha')
+  })
+})
+
+function deepFreeze<T>(o: T): T {
+  if (typeof o === 'object' && o !== null && !Object.isFrozen(o)) {
+    Object.freeze(o)
+    for (const v of Object.values(o)) deepFreeze(v)
+  }
+  return o
+}
+
+describe('desiredAccount — ponto fixo (varredura aleatória com semente)', () => {
+  test('realimentar `desired` como `current` converge em ≤ 2 passos, sem ciclo de 2, sem mutar a entrada', () => {
+    let seed = 0x5eed1234
+    const rnd = (): number => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+      return seed / 2 ** 32
+    }
+    const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)]!
+    const ACCOUNTS = ['p', 'a', 'b', 'c', 'x'] as const
+    const kinds = [
+      () => undefined,
+      () => err('rate-limited'),
+      () => err('dead-token'),
+      () => err('network'),
+      () => err('unexpected'),
+      () => err('no-token'),
+      () => mk(pick([0.1, 0.5, 0.75, 0.79, 0.8, 0.85, 0.89, 0.9, 0.95, 0.99]), pick([0.1, 0.5, 0.9, 0.96])),
+      () => mk(pick([0.1, 0.85, 0.95]), 0.1, { reset5h: SEC - 60 }),
+      () => mk(0.1, 0.1, { status: 'rejected' }),
+      () => mk(0.1, 0.1, { status5h: 'allowed_warning' }),
+    ]
+    for (let i = 0; i < 3000; i++) {
+      const accounts = ACCOUNTS.slice(0, 3 + Math.floor(rnd() * 3)) as string[]
+      const pref = pick(accounts)
+      const pool = accounts.filter(() => rnd() < 0.7)
+      if (rnd() < 0.5 && !pool.includes(pref)) pool.unshift(pref)
+      const latest: Record<string, Measurement> = {}
+      for (const a of accounts) {
+        const m = pick(kinds)()
+        if (m) latest[a] = m
+      }
+      const groups = rnd() < 0.3 ? [accounts.filter(() => rnd() < 0.5)].filter((g) => g.length >= 2) : []
+      const override = rnd() < 0.3 ? { account: pick(accounts), until: rnd() < 0.5 ? NOW + 1000 : NOW - 1 } : undefined
+      const start = rnd() < 0.1 ? 'fora' : pick(accounts)
+      const x: Extra = { mux: { account: pref, accounts, pool }, groups, override, current: start, returnOnReset: rnd() < 0.7 }
+      deepFreeze(x)
+      deepFreeze(latest)
+      const run = (cur: string): MuxEval => eval_(latest, { ...x, current: cur })
+      const d1 = run(start).desired
+      const d2 = run(d1).desired
+      const d3 = run(d2).desired
+      const ctx = JSON.stringify({ i, start, d1, d2, d3, pref, pool, groups, override, latest, rr: x.returnOnReset })
+      expect(d3, ctx).toBe(d2) // ponto fixo em ≤ 2 iterações
+      expect(d2, ctx).toBe(d1) // na verdade em 1: depois de mover, ficar; logo nunca há ciclo de 2
+    }
   })
 })
