@@ -491,7 +491,9 @@ test('usage.json não contém token', ...)
                                                 → current            'sticky'
      senão                                      → pref               'preferred'
 4. pref ∉ pool                                  → pref               'preferred-outside-pool' (warn)
-5. 1ª conta c do pool, na ordem, com c ∉ groupOf(pref), sem repetir grupo já visto,
+5. se `current` já é um destino válido (current ∈ pool, ≠ pref, ∉ groupOf(pref), availability(current) == available, sem histerese)
+                                                → current            'pool'  (fica: trocar custa parar sessões; a ordem do pool escolhe destino, não faz saltar entre reservas)
+   senão a 1ª conta c do pool, na ordem, com c ∉ groupOf(pref), sem repetir grupo já visto,
    availability(c) == available                 → c                  'pool'
 6. nenhuma                                      → current (ou pref, se current ∉ mux.accounts)  'none-available' (warn)
 ```

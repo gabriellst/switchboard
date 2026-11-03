@@ -159,6 +159,7 @@ A cada avaliação, para cada mux com `pool` não vazio:
 desejada(mux) =
   preferida                         se preferida disponível
   senão, se preferida ∉ mux.pool    → preferida   (fica parado nela e avisa)   [usuário]
+  senão, se a atual já é uma reserva válida (do pool, disponível, distinta da preferida)   → fica  [minha escolha, 03/11: trocar custa parar sessões]
   senão, a 1ª conta disponível de mux.pool (na ordem do pool), distinta da preferida e sem duplicatas
   senão (nenhuma disponível)        → fica na atual e avisa
 ```
