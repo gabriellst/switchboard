@@ -342,10 +342,11 @@ test('parseDuration', () => {
 
 **Files:**
 - Create: `src/core/fsx.ts`, `src/core/tokens.ts`, `src/core/links.ts`, `src/core/runtime.ts`, `test/state.test.ts`
-- Modify: `test/helpers.ts` (`sb.addToken(account, token = FAKE_TOKEN)`)
+- Modify: `test/helpers.ts` (`sb.addToken(account, token = FAKE_TOKEN)`), `src/core/paths.ts` + `test/paths.test.ts` (guarda de nome, abaixo)
 
 **Interfaces:**
 - Consumes: `Paths`, `SbError` (Task 5).
+- Defesa em profundidade (ruling do controlador após a revisão da Task 5): `assertSafeName(name: string): string` em `src/core/paths.ts` — lança `SbError(…, EXIT.USAGE)` (mensagem em português) a menos que `/^[a-z0-9][a-z0-9_-]{0,31}$/.test(name)`; `tokenFile`, `muxLink` e `pinLink` passam a chamá-la (`keychain` já é um nome válido). Teste: `tokenFile(p, '../x')`, `'a/b'`, `''`, `'A'` e um nome de 33 caracteres lançam com exit 3; `'admin1'`, `'keychain'`, `'a_b-c'` passam.
 - Produces:
   - `writeAtomic(path, text, mode)`, `symlinkAtomic(link, target)` (link temporário + `rename`), `withLock<T>(paths, fn: () => Promise<T>, opts?: { waitMs = 30_000 }): Promise<T>` (lança `SbError` exit 5).
   - `ensureState(paths)` (dirs 700: raiz, `tokens`, `mux`, `pins`, `log`, `backup`; `tokens/keychain.json` = `{}` modo 600), `saveToken(paths, account, token)` (`{"env":{"CLAUDE_CODE_OAUTH_TOKEN":…}}`, 600), `loadSecret(paths, account): string | null` (**só** a sonda, o login e a migração chamam), `hasToken(paths, account): boolean`.
