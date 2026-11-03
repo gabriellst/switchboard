@@ -153,6 +153,11 @@ desejada(mux) =
 
 Turno que falha porque a conta bateu no limite: a sessão fica livre, cai no passo 2, e ao ser
 reaberta já está na conta nova; o usuário pede "continue".
+**Não medido** — o estado exato da sessão depois de um turno que falha por limite não está entre
+F1–F11. **[minha escolha]**: conta como livre quando `status != 'busy'` e `inFlight` vazio,
+inclusive com `state: 'blocked'` (o vigia do `claude-conta` já trata assim; visto no `vigia.log`
+de 03/11 10:57, "livre: 95b0deff blocked"). O plano começa com um spike que confirma isso; se a
+sessão ficar `busy` esperando uma escolha, a regra para esse estado entra antes do `watch`.
 
 ## 5. Configuração e estado
 
