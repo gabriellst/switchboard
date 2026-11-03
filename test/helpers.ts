@@ -131,3 +131,23 @@ export function filesUnder(dir: string): string[] {
   }
   return out
 }
+
+export interface FakeApi {
+  url: string
+  stop(): void
+  requests: Request[]
+}
+
+/** API HTTP falsa em loopback (porta efêmera). Quem sobe, para: `api.stop()`. Nunca toca a rede real. */
+export async function fakeApi(handler: (req: Request) => Response | Promise<Response>): Promise<FakeApi> {
+  const requests: Request[] = []
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    async fetch(req) {
+      requests.push(req.clone() as unknown as Request)
+      return handler(req)
+    },
+  })
+  return { url: `http://127.0.0.1:${server.port}`, stop: () => void server.stop(true), requests }
+}
