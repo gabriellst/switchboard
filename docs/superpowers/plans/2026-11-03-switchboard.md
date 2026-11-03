@@ -535,7 +535,7 @@ test('returnOnReset false: em admin1 disponível, fica (sticky)', ...)
   - `buildPanel(cfg, usage, runtime, paths): PanelData`; `renderPanel(d: PanelData, opts: { nowMs: number; timeZone?: string }): string`; `renderAccounts(…)`.
   - `formatReset(epochS, nowMs, timeZone?)`: mesmo dia → `HH:MM`, outro dia → `dd/mm`; `bar(u)` = 10 células, `round(u*10)` de `█`, resto `░`, e `NN%`.
   - Abaixo da linha `total`, a nota do §6: `(média das contas do pool; só vale como "quanto do total" se os planos forem iguais)`.
-  - `sb usage [--json] [--watch] [--every 30]` (mede com `maxAgeMs: 60_000`); `sb accounts [--json]` (estado do token: `ok` / `sem token` / `JSON inválido` / `morto` pela última medição; grupo de duplicata; muxes e papel).
+  - `sb usage [--json] [--watch] [--every 30]` (mede com `maxAgeMs: 60_000`); `sb accounts [--json]` = **central de contas** (decisão do usuário, 03/11 tarde): lista TODAS as contas registradas, anexadas ou não — estado do token (`ok` / `sem token` / `JSON inválido` / `morto` pela última medição), grupo de duplicata, resumo 5h/semanal com reset, e os muxes com papel e posição; conta sem mux aparece marcada `sem mux`. `--json`: `Array<{ name: string; token: 'ok'|'missing'|'invalid-json'|'dead'; measurement?: Measurement; sameAs?: string; attached: boolean; muxes: Array<{ mux: string; role: 'preferred'|'pool'|'allowed'; position?: number }> }>`. Teste: conta registrada sem mux → `attached: false` e linha `sem mux`.
 
 - [ ] **Step 1: Testes que falham**
 
@@ -564,11 +564,11 @@ test('sem config → exit 2 com dica', ...)
 - [ ] **Step 4: Verificar** — `bun test` · PASS.
 - [ ] **Step 5: Commit** — `git add -A && git commit -m "feat: painel de uso e lista de contas"`
 
-### Task 12: `sb mux` (list/add/set/rm) e `sb which`
+### Task 12: `sb mux` (list/add/set/rm), `sb attach`/`sb detach`, `sb accounts rm` e `sb which`
 
 **Files:**
-- Create: `src/core/mux.ts`, `src/commands/mux.ts`, `src/commands/which.ts`, `test/mux.test.ts`
-- Modify: `src/cli.ts`, `test/hygiene.test.ts` (`['mux']`, `['which','--json']`)
+- Create: `src/core/mux.ts`, `src/core/accounts.ts`, `src/commands/mux.ts`, `src/commands/attach.ts`, `src/commands/detach.ts`, `src/commands/which.ts`, `test/mux.test.ts`, `test/accounts.test.ts`
+- Modify: `src/cli.ts`, `src/commands/accounts.ts` (subcomando `rm`; `sb accounts` sem subcomando segue sendo a listagem da Task 11), `test/hygiene.test.ts` (`['mux']`, `['which','--json']`, `['attach','admin1','bk','--pool']`, `['detach','admin1','bk']`, `['accounts','rm','admin1']` sem `--yes`)
 
 **Interfaces:**
 - Consumes: `editConfig`, `ensureConfig`, `loadConfig` (6); `pointMux`, `hasToken`, `ensureState` (7).
@@ -578,6 +578,12 @@ test('sem config → exit 2 com dica', ...)
   - `setMux(ctx, name, partial)`: só edita a config e diz que a troca acontece no próximo ciclo do `watch` ou com `sb swap`.
   - `rmMux(ctx, name)`: recusa o `default`; tira da config e **mantém** o link (sessões existentes continuam abrindo; o `doctor` avisa link órfão).
   - `sb which [pasta] [--json]` → imprime o caminho do settings do mux da pasta (`--json`: `{ mux, settings, account }`). Usado pelo wrapper (Task 20).
+  - **Contas e muxes são ligados por `attach`** (decisão do usuário, 03/11 tarde): a conta é cadastrada primeiro (`sb login`), sem mux nenhum; depois é anexada. Em `src/core/accounts.ts`:
+    - `interface AttachSpec { mux: string; pool?: boolean | number /* true = fim da fila; número = posição 1-based */; preferred?: boolean }`
+    - `attachAccount(ctx, account: string, spec: AttachSpec): Promise<{ changed: string[] }>`: a conta tem de estar registrada e ter token (senão exit 3, "rode `sb login <conta> --attach <mux>`" — a Task 13 troca essa recusa por login + attach); mux inexistente → exit 3; acrescenta a `mux.accounts` se faltar; `pool` insere (ou move, se já está) em `mux.pool` no fim ou na posição pedida; `preferred` define `mux.account`; tudo por `editConfig` (invariantes valem: `keychain` no pool → exit 3); idempotente (`changed: []` se nada mudou). Mudar a preferida não troca a conta atual: vale no próximo ciclo do `watch` ou com `sb swap`.
+    - `detachAccount(ctx, account, mux): Promise<{ changed: string[] }>`: tira de `mux.accounts` e de `mux.pool`; exit 3 se não estava anexada, se é a preferida do mux ("defina outra com `sb attach <outra> <mux> --preferred`") ou se é a conta atual do mux (`currentAccount`; "faça `sb swap` antes").
+    - `removeAccount(ctx, account, o: { yes: boolean }): Promise<void>`: exit 3 sem `yes` ("apaga o token; só voltando a fazer `sb login`"); exit 3 se anexada a algum mux (lista os muxes); senão remove `accounts.<conta>` da config e apaga `tokens/<conta>.json`.
+    - Comandos: `sb attach <conta> <mux> [--pool] [--at N] [--preferred] [--json]`, `sb detach <conta> <mux> [--json]`, `sb accounts rm <conta> --yes`.
 
 - [ ] **Step 1: Testes que falham**
 
@@ -591,6 +597,14 @@ test('resolveMuxForDir: root mais profundo vence; fora de todos → default', ()
   // roots ~/p e ~/p/berzerk; dir ~/p/berzerk/club → 'berzerk'; dir /tmp → cfg.default
 })
 test('`sb which` dentro de bk imprime o caminho do link', ...)
+// test/accounts.test.ts
+test('attach --pool acrescenta a accounts e ao fim do pool; --at 1 põe na frente; repetir é idempotente (changed [])', ...)
+test('attach --preferred muda mux.account e não troca o link atual', ...)
+test('attach de conta sem token ou fora do registro → exit 3 com a dica do login; mux inexistente → exit 3', ...)
+test('attach keychain --pool → exit 3 (config inválida não é gravada)', ...)
+test('detach tira de accounts e pool; recusa preferida, conta atual e conta não anexada (exit 3)', ...)
+test('accounts rm sem --yes → exit 3; anexada → exit 3 listando os muxes; ok remove registro e token', ...)
+test('uma conta registrada sem mux é válida na config (accounts sem nenhum mux que a cite)', ...)
 ```
 
 - [ ] **Step 2: Rodar e ver falhar** — `bun test test/mux.test.ts` · FAIL.
@@ -602,14 +616,15 @@ test('`sb which` dentro de bk imprime o caminho do link', ...)
 
 **Files:**
 - Create: `src/core/login.ts`, `src/commands/login.ts`, `test/login.test.ts`
+- Modify: `src/commands/attach.ts` (conta não cadastrada → login + attach)
 
 **Interfaces:**
-- Consumes: `cleanEnv`, `claudeBin` (5); `probeToken` (8); `saveToken`, `withLock` (7); `editConfig`, `ensureConfig` (6).
+- Consumes: `cleanEnv`, `claudeBin` (5); `probeToken` (8); `saveToken`, `withLock` (7); `editConfig`, `ensureConfig` (6); `attachAccount`, `AttachSpec` (12).
 - Produces:
   - `extractTokens(raw: string): string[]` (porta de `limpar_ansi` + `extrair_tokens_texto` do `claude-conta`, linhas 350–376: tira OSC/cores, cursor vira quebra, junta o token que encostou no fim da linha com as linhas seguintes só de `[A-Za-z0-9_-]`; devolve até 3 candidatos, o juntado primeiro).
   - `runSetupToken(ctx, onUrl: (url: string) => void, limitMs = 900_000): Promise<string[]>`: `CLAUDE_CONFIG_DIR` temporário com `.claude.json` `{"hasCompletedOnboarding":true,"theme":"dark"}`, comando PTY das Global Constraints, `env = cleanEnv + { CLAUDE_CONFIG_DIR, TERM: 'xterm-256color' }`; acha a URL com `/https:\/\/\S+\/oauth\/authorize\?\S+/`; para 2 s depois de ver o token; Enter (`\r`) até 3 vezes se nenhuma URL aparecer (8 s + 6 s por tentativa); apaga o diretório temporário no `finally`. **O buffer bruto nunca vai para log.**
-  - `login(ctx, account, o: { terminal: boolean; readPasted?: () => Promise<string> }): Promise<{ account: string; created: boolean }>`: valida o nome; candidatos do PTY (ou colado, que tem de casar `/^sk-ant-oat01-[A-Za-z0-9_-]{20,}$/`); o 1º candidato com sonda `ok` é salvo (600); registra `accounts.<conta>` se novo; `login.log` só com marcos (`abrindo`, `url`, `validando`, `FIM ok|falhou`).
-  - `sb login <conta> [--terminal]`: abre a URL com `open` se o `setup-token` não abrir; sem TTY no stdout, roda desanexado (`sb login <conta> --foreground` com `detached: true`, saída em `login.log`), espera até 25 s pela URL, imprime-a e sai; o fim chega por notificação.
+  - `login(ctx, account, o: { terminal: boolean; readPasted?: () => Promise<string>; attach?: AttachSpec }): Promise<{ account: string; created: boolean; attached?: string[] }>`: valida o nome; candidatos do PTY (ou colado, que tem de casar `/^sk-ant-oat01-[A-Za-z0-9_-]{20,}$/`); o 1º candidato com sonda `ok` é salvo (600); registra `accounts.<conta>` se novo; **se `o.attach`, depois de salvar e registrar chama `attachAccount`** (atalho login + attach do usuário; o mux é validado ANTES de abrir o navegador — mux inexistente → exit 3 sem login; se o attach falhar depois do login, o token e o registro ficam, exit 3 e a mensagem manda rodar `sb attach`); `login.log` só com marcos (`abrindo`, `url`, `validando`, `attach`, `FIM ok|falhou`).
+  - `sb login <conta> [--terminal] [--attach <mux> [--pool] [--at N] [--preferred]]` e, equivalente, `sb attach <conta> <mux> …` quando a conta ainda não existe (faz o login com as mesmas regras e anexa): abre a URL com `open` se o `setup-token` não abrir; sem TTY no stdout, roda desanexado (`sb login <conta> --foreground` com `detached: true`, saída em `login.log`), espera até 25 s pela URL, imprime-a e sai; o fim chega por notificação.
 
 - [ ] **Step 1: Testes que falham**
 
@@ -625,6 +640,11 @@ test('login com claude falso: URL, token validado, salvo 600, conta registrada',
 test('sonda 401 → exit 1, nada salvo, config intacta', ...)
 test('--terminal com token colado inválido → recusa sem gravar', ...)
 test('nome inválido ou "keychain" → exit 3', ...)
+test('login --attach bk --pool: conta registrada, token 600 e mux.bk.accounts/pool com a conta no fim', ...)
+test('login --attach com mux inexistente → exit 3 ANTES de qualquer chamada ao claude falso', ...)
+test('sonda 401 com --attach → nada registrado nem anexado', ...)
+test('attach falha depois do login (ex.: --pool de keychain não, pool inválido) → token e registro ficam, exit 3, mensagem cita `sb attach`', ...)
+test('`sb attach nova bk` com conta inexistente faz login e anexa; com conta existente só anexa (claude falso não chamado)', ...)
 test('login.log e stdout sem token', ...)
 ```
 
@@ -914,7 +934,7 @@ test('wrapper: `sb which` falhando → exit 1 e o claude não é chamado', ...)
 - Produces:
   - `interface Finding { severity: 'error' | 'warn'; code: FindingCode; subject: string; message: string }` (`code` é API do `--json`).
   - Códigos de erro: `config.invalid`, `config.no-token` (conta em `accounts`/`pool` sem `tokens/<c>.json`), `link.broken` (mux/pin quebrado ou alvo inválido — F6), `token.invalid-json`, `token.no-oauth`, `token.dead` (última medição 401/403), `token.perms` (≠ 600), `session.no-settings` (sessão em segundo plano sob o root de um mux cuja conta não é `keychain`, sem `--settings`), `view.no-settings` (processo `claude agents` sem `--settings` de `<state>/mux/`, lido de `ps -axo pid=,command=` via `ctx.run`).
-  - Códigos de aviso: `state.perms` (dir ≠ 700), `pool.duplicates`, `pool.preferred-outside`, `link.orphan` (link de mux que saiu da config), `session.legacy`, `session.foreign`, `view.legacy`, `watch.stopped` (`watch.json` ausente, pid morto ou `lastTick` > 90 s), `claude.format` (adaptador recusou o formato).
+  - Códigos de aviso: `state.perms` (dir ≠ 700), `pool.duplicates`, `pool.preferred-outside`, `account.unattached` (conta registrada sem nenhum mux), `link.orphan` (link de mux que saiu da config), `session.legacy`, `session.foreign`, `view.legacy`, `watch.stopped` (`watch.json` ausente, pid morto ou `lastTick` > 90 s), `claude.format` (adaptador recusou o formato).
   - `diagnose(ctx): Promise<Finding[]>`; `fix(ctx, findings)`: recria links (mux → `currentAccount` ou a preferida; pin → `tokens/<c>.json`), `chmod 600/700`, adota `session.no-settings` (parada → `writeJobFlags` com `replaceSettings(…, muxLink)`; viva → `runtime.pending` com `reason: 'adopt'`).
   - `sb doctor [--fix] [--json]`; exit 1 se sobrar erro, 2 se a config é inválida.
 

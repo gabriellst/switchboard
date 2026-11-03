@@ -307,8 +307,9 @@ Todos com `--json` quando produzem dados; nada interativo por padrão; exit code
 | Comando | Faz |
 |---|---|
 | `sb` · `sb usage [--json] [--watch]` | Painel (abaixo). `--watch` redesenha a cada N s |
-| `sb login <conta> [--terminal]` | F9; abre o navegador, valida com uma sonda, grava o token (600) e registra a conta (sem prioridade nem pool: isso é do mux). `--terminal`: colar o token |
-| `sb accounts` | Lista contas: duplicatas, estado do token e em quais muxes aparecem (permitida / pool) |
+| `sb login <conta> [--terminal] [--attach <mux> [--pool] [--at N] [--preferred]]` | F9; abre o navegador, valida com uma sonda, grava o token (600) e registra a conta (sem prioridade nem pool: isso é do mux). `--terminal`: colar o token |
+| `sb accounts [--json]` · `sb accounts rm <conta> --yes` | **Central de contas** [usuário, 03/11 tarde 2]: todas as contas registradas (anexadas ou não): estado do token, duplicatas, uso, e em quais muxes aparecem (preferida / pool / permitida); `rm` apaga o registro e o token (recusa conta anexada) |
+| `sb attach <conta> <mux> [--pool] [--at N] [--preferred]` · `sb detach <conta> <mux>` | **[usuário, 03/11 tarde 2]** A conta nasce sem mux (`sb login`); `attach` a põe em `accounts` do mux (e, com `--pool`, na fila; `--preferred` a faz preferida). Atalho: `attach` de conta que não existe faz o login antes (igual a `login --attach`). `detach` recusa a preferida e a conta atual do mux |
 | `sb mux [add <nome> --root <pasta> --account <conta> [--accounts a,b] [--pool a,b] \| set <nome> … \| rm <nome>]` | Gerencia muxes; `--pool` define a fila (a ordem é a prioridade) |
 | `sb agents [mux]` | `exec claude agents --cwd <root> --settings <state>/mux/<mux>.json`. Sem nome: deduz pela pasta atual |
 | `sb run [mux] -- <args>` | `claude <args> --settings …/mux/<mux>.json` (interativo) |
