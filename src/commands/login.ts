@@ -149,7 +149,12 @@ export async function runLogin(ctx: Ctx, a: LoginArgs, io: LoginIO = defaultIO()
       ctx.notify(`Switchboard: conta "${r.account}" pronta`, a.attach ? `token salvo e conta anexada ao mux ${a.attach.mux}` : 'token salvo e conta registrada')
     }
   } catch (e) {
-    if (detachedChild) ctx.notify('Switchboard: login não concluído', `Rode no terminal: sb login ${a.account} --terminal`)
+    if (detachedChild) {
+      // login feito e só o attach falhou: token e registro ficaram, então o conselho é `sb attach` (não colar token de novo)
+      const attachOnly = e instanceof SbError && e.detail?.includes('sb attach') === true
+      if (attachOnly) ctx.notify(`Switchboard: conta "${a.account}" salva, sem anexar`, `${e.message} ${e.detail?.trim() ?? ''}`)
+      else ctx.notify('Switchboard: login não concluído', `Rode no terminal: sb login ${a.account} --terminal`)
+    }
     throw e
   }
 }

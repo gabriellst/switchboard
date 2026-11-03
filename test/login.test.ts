@@ -476,6 +476,26 @@ describe('runLogin (notificação do processo desanexado)', () => {
   })
 })
 
+test('runLogin: só o attach falhou depois do login → a notificação manda rodar `sb attach`, não o --terminal', async () => {
+  const sb = withRef()
+  fakeOutput(sb)
+  const sent: Array<[string, string]> = []
+  const ctx = ctxFor(sb, await okApi(), { notify: (t, m) => void sent.push([t, m]) })
+  // o mux some entre o preflight e o attach: o claude falso não dá gancho, então a config é trocada na hora da sonda
+  const realFetch = ctx.fetch
+  ctx.fetch = async (url, init) => {
+    writeConfig(sb, { switchboard: 1, accounts: { ref: {} }, mux: {} })
+    return realFetch(url, init)
+  }
+  const r = await exitOf(runLogin(ctx, { account: 'nova', terminal: false, foreground: true, attach: { mux: 'bk', pool: true } }, { isTTY: false, write: () => undefined, err: () => undefined }))
+  expect(r?.exit).toBe(EXIT.USAGE)
+  expect(sent).toHaveLength(1)
+  expect(sent[0]!.join(' ')).toContain('sb attach nova bk --pool')
+  expect(sent[0]!.join(' ')).not.toContain('--terminal')
+  expect(sent.flat().join(' ')).not.toMatch(/sk-ant-/)
+  expect(readFileSync(tokenFile(sb.paths, 'nova'), 'utf8')).toContain(FAKE_TOKEN) // token e registro ficaram
+})
+
 test('populatedSandbox: login de conta nova não toca nos tokens existentes', async () => {
   const sb = populatedSandbox()
   fakeOutput(sb)
