@@ -20,6 +20,10 @@ const InFlightSchema = z.looseObject({
   kinds: z.array(z.string()),
   // ausente logo depois de um respawn (F13)
   drainableMonitors: z.number().optional(),
+  // `wake` (ScheduleWakeup pendente), `selfWake` e `fan` também podem faltar; passam intactos e a Task 15 só olha `wake`
+  wake: z.unknown().optional(),
+  selfWake: z.unknown().optional(),
+  fan: z.unknown().optional(),
 })
 
 const JobStateSchema = z.looseObject({
@@ -35,7 +39,7 @@ export interface JobState {
   /** o argv com que o daemon reabre a sessão (preserva ordem e repetições) */
   respawnFlags: string[]
   /** pode faltar (sessão parada) ou não ter `drainableMonitors` */
-  inFlight?: { tasks: number; queued: number; kinds: string[]; drainableMonitors?: number }
+  inFlight?: { tasks: number; queued: number; kinds: string[]; drainableMonitors?: number; wake?: unknown; selfWake?: unknown; fan?: unknown }
   state?: string
   needs?: string
   detail?: string
