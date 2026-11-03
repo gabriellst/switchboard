@@ -796,6 +796,7 @@ test('mux inexistente → exit 3', ...)
 - Modify: `src/cli.ts`, `src/report.ts` (`renderSwap`), `test/hygiene.test.ts` (`['swap','bk','admin1','--json']`)
 
 **Interfaces:**
+- Nota do review da Task 15: quem faz polling (Tasks 17/19) usa `loadSessionsWithWarnings` (devolve `{ sessions, warnings }`) e DEDUPLICA os avisos (por id+motivo), senão `loadSessions` repete a linha em `watch.log` a cada ciclo.
 - Notas do review da Task 14: `writeJobFlags` NÃO tem guarda de sessão viva (o chamador garante) — antes de reescrever flags, o chamador confirma com `listAgents` que a entrada NÃO tem `pid` (logo após `stopSession`; `stopSession` devolve `false` quando `claude stop` falha, inclusive em sessão já parada: checar o `pid` ANTES de chamá-la); `stopSession` bloqueia o laço de eventos (`Atomics.wait`, igual ao `ctx.run` síncrono): tratar a parada como passo bloqueante e não concorrer com handlers de SIGTERM que precisem disparar rápido; o backup usa `backupDir(stamp)` (não sobrescreve backups anteriores).
 - Consumes: `desiredAccount`, `availability` (10); `readUsage` (9); `pointMux`, `currentAccount`, `readRuntime`, `writeRuntime`, `withLock` (7); `loadSessions`, `activityOf`, `startedAt`, `callerJobId` (15); `stopSession` (14).
 - Produces:
@@ -871,6 +872,7 @@ test('painel mostra a linha de sessões fixas', ...)
 - Modify: `src/cli.ts`, `test/hygiene.test.ts` (`['watch','--once','--json']`)
 
 **Interfaces:**
+- Nota do review da Task 15: quem faz polling (Tasks 17/19) usa `loadSessionsWithWarnings` (devolve `{ sessions, warnings }`) e DEDUPLICA os avisos (por id+motivo), senão `loadSessions` repete a linha em `watch.log` a cada ciclo.
 - Consumes: `measureAll`, `readUsage` (9); `desiredAccount` (10); `applySwap`, `restartStale` (17); `applyPending` (18); `loadSessions`, `isLimitBlocked` (15); `withLock`, runtime (7); `parseDuration` (6).
 - Produces:
   - `interface TickReport { skipped?: 'locked'; measured: boolean; evaluations: MuxEval[]; swaps: SwapOutcome[]; restarts: Record<string, ReturnType<typeof restartStale>>; pending: ReturnType<typeof applyPending>; notices: string[] }`
