@@ -731,6 +731,7 @@ Precedência de `activityOf`:
 ```
 !live (sem pid)                                         → 'stopped'  (vale mesmo com job blocked/limite; estado do job é obsoleto sem pid)
 s.agent.id == callerJobId                               → 'busy'     (nunca parar quem chamou)
+live ∧ job == null (state.json ausente, ilegível ou com formato inesperado) → 'busy'  (ruling do controlador após a revisão da Task 15: NUNCA parar o que não conseguimos ler — um schema que mude numa atualização do Claude esconderia cron/monitor; o aviso vai para o log)
 hasScheduledWork                                        → 'scheduled'
 isLimitBlocked                                          → 'limit-blocked'
 status == 'busy' || tasks > 0 || queued > 0             → 'busy'
