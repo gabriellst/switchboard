@@ -20,7 +20,10 @@ export interface Sandbox {
   ctx(over?: Partial<Ctx>): Ctx
   runSb(args: string[], opts?: { env?: Record<string, string>; cwd?: string; input?: string }): { code: number; stdout: string; stderr: string }
   /** Como `runSb`, mas sem bloquear o event loop: serve quando o teste hospeda um `fakeApi` no mesmo processo. */
-  runSbAsync(args: string[], opts?: { env?: Record<string, string>; cwd?: string }): Promise<{ code: number; stdout: string; stderr: string }>
+  runSbAsync(
+    args: string[],
+    opts?: { env?: Record<string, string>; cwd?: string; timeoutMs?: number },
+  ): Promise<{ code: number; stdout: string; stderr: string }>
   /** Grava `tokens/<conta>.json` (600) direto, sem passar pelo código sob teste. */
   addToken(account: string, token?: string): void
   calls(): FakeCall[]
@@ -81,8 +84,21 @@ export function sandbox(): Sandbox {
         let stderr = ''
         child.stdout.on('data', (c: Buffer) => (stdout += c.toString('utf8')))
         child.stderr.on('data', (c: Buffer) => (stderr += c.toString('utf8')))
-        child.on('error', reject)
-        child.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }))
+        // filho pendurado não pode sobreviver ao teste: passou do prazo, SIGKILL e o teste falha com a saída parcial
+        let timedOut = false
+        const timer = setTimeout(() => {
+          timedOut = true
+          child.kill('SIGKILL')
+        }, opts.timeoutMs ?? 10_000)
+        child.on('error', (e) => {
+          clearTimeout(timer)
+          reject(e)
+        })
+        child.on('close', (code) => {
+          clearTimeout(timer)
+          if (timedOut) reject(new Error(`sb ${args.join(' ')} passou de ${opts.timeoutMs ?? 10_000} ms e foi morto\nstdout: ${stdout}\nstderr: ${stderr}`))
+          else resolve({ code: code ?? -1, stdout, stderr })
+        })
       })
     },
     addToken(account, token = FAKE_TOKEN) {

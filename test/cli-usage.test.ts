@@ -121,7 +121,7 @@ describe('sb / sb usage (subprocesso)', () => {
     })
     expect(r.code).toBe(0)
     expect((JSON.parse(r.stdout) as { busy: boolean }).busy).toBe(true)
-  })
+  }, 15_000)
 
   test('sem config → exit 2 com dica', () => {
     const sb = sandbox()
