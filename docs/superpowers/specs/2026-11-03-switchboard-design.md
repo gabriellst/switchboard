@@ -1,6 +1,6 @@
 # switchboard (`sb`) — design
 
-> Status: design aprovado em conversa em 03/11/2026, aguardando o plano de implementação.
+> Status: design aprovado em conversa em 03/11/2026; spikes de sessão feitos (F12–F14), aguardando implementação.
 > Revisão de 03/11 (tarde): **prioridade e hot-swap são por mux, não por conta** [usuário] (§4, §5).
 > Substitui o `~/.local/bin/claude-conta` (Python, 900 linhas) quando estiver pronto.
 > Marcação: **[usuário]** = decidido pelo usuário · **[minha escolha]** = decisão de quem escreveu o
@@ -59,7 +59,7 @@ quando uma conta acaba, o mux migra sozinho para a próxima e volta quando ela r
 - **Repassar `CLAUDE_CODE_OAUTH_TOKEN` herdado** para um `claude` que possa subir o daemon: o
   daemon herdaria o token e todas as sessões (inclusive berzerk) iriam junto.
 
-## 3. Fatos verificados (spike de 03/11/2026, Claude Code 2.1.317)
+## 3. Fatos verificados (spikes de 03/11/2026, Claude Code 2.1.317)
 
 Estes fatos são restrições. Foram medidos, não supostos.
 
@@ -106,6 +106,34 @@ Estes fatos são restrições. Foram medidos, não supostos.
   `claude-conta`, `VARS_SESSAO`).
 - **F11 — `claude-conta` reescreve `--settings` só dentro de `~/.claude/contas/`** (`separar_settings`
   compara o diretório do caminho). Relevante só durante a migração, enquanto os dois coexistirem.
+- **F12 — Estado depois de um turno que falha por limite. [spike 03/11]** `job.state == "blocked"` e
+  `tempo "blocked"`, `needs` começando com `rate limited — wait and retry` (o texto traz a janela, `5-hour` ou
+  `weekly`, e o reset), e **`inFlight.queued == 1` mesmo sem trabalho nenhum**: a regra "livre = `queued == 0`" nunca
+  pararia essa sessão. Sessão viva presa por limite com `tasks == 0`: `status` `idle` com pid; com `tasks > 0`
+  (agentes/bash em segundo plano): `status` `busy`. Sessões históricas, paradas com o limite pendente: `blocked`,
+  sem `status` e sem `pid`. Não observado: a sessão entrar no limite, sair dele no reset, e o item `queued` rodar de
+  novo com outro token. Dados: `spikes/sessoes/RESULTADOS.md` §1.
+- **F13 — Marcadores de trabalho agendado. [spike 03/11]** Observados com n = 1 por mecanismo, na sessão testada, em
+  `state.json` `inFlight`: `/loop` com intervalo e CronCreate one-shot = `kinds ["session_cron"]` e `selfWake true`;
+  ScheduleWakeup (`/loop` dinâmico) = `session_cron` mais `inFlight.wake {at, reason, fires}` (e `selfWake`
+  depois da 1ª leitura); Monitor = `kinds ["monitor"]` mais `fan[]`. `drainableMonitors` ficou 0 o tempo todo e
+  `queued` ficou 0: não são marcadores. `status` `idle` entre ticks não prova ausência de agendamento (e `busy` no
+  Monitor não prova turno em andamento). `agents.state` e `job.state` divergem no mesmo instante: decidir por
+  `job.state`/`inFlight`. Depois de `stop` + `respawn`: o loop recorrente e o CronCreate one-shot **sobreviveram**
+  (o one-shot ficou invisível: `kinds []`, `tasks 0` até disparar), ScheduleWakeup e Monitor **morreram**; tick perdido
+  na parada não é reposto. Sem `pid`, o `state.json` pode mentir (anomalia: `stop` de sessão `done` não o reescreveu
+  e `inFlight`/`selfWake` ficaram obsoletos). Logo depois do respawn o `job.state` pode ser `running` e `inFlight`
+  vir sem `drainableMonitors`: o parser tolera chave ausente. **Risco aceito:** a regra do §4 não vê um one-shot de
+  CronCreate pendente depois de um respawn. Dados: `RESULTADOS.md` §3.
+- **F14 — Reabrir sessão parada e `startedAt`. [spike 03/11]** `claude respawn <id>` de sessão parada e ociosa mantém
+  `id`, `sessionId` e `respawnFlags`, ganha pid novo, não cria job; relê o `--settings` dos `respawnFlags` (provado só
+  para ele, por um respawn que crashou com o arquivo ausente). Mas imprime "respawned" até quando a sessão cai logo
+  depois: o sucesso se julga por `agents --json`/`state.json`, não pelo stdout. `claude --bg --resume <id>` com flags
+  (até idênticos aos salvos) ou com id curto **sempre criou uma cópia** (id e `sessionId` novos) nos 3 testes; a forma
+  sem flags não foi testada (a ajuda do claude diz que ela continua sob o mesmo id). `agents.startedAt` = momento em
+  que o host foi (re)aberto, ≈ 0,5–0,7 s depois da reivindicação do processo reserva; mudou no respawn testado; **não**
+  é o início do processo do SO; em sessão parada é o `createdAt` do job, então só serve para sessão viva. Dados:
+  `RESULTADOS.md` §2.
 
 ## 4. Modelo
 
@@ -158,17 +186,34 @@ e pode estar no pool de vários muxes ao mesmo tempo (cada mux anda na própria 
   conta antiga e passam para a nova na próxima vez que pararem por conta própria (ou quando o
   usuário as reabrir). Se a conta antiga estiver **esgotada**, o `watch` notifica em vez de parar
   ("sessão X tem trabalho agendado e ficou na conta esgotada Y") **[minha escolha]**. Detectar
-  "trabalho agendado" é um **spike obrigatório no início do plano**: `inFlight.kinds`,
-  `inFlight.drainableMonitors`, crons/`ScheduleWakeup` e `/loop` precisam ser observados numa
-  sessão de teste; até isso estar provado, a regra conservadora é: qualquer `inFlight` não vazio
-  OU sessão com `kinds`/monitores registrados = não parar.
+  "trabalho agendado" foi medido no spike de 03/11 (F13). Regra **[spike 03/11, provisória: n = 1 por mecanismo]**:
+
+  ```
+  hasScheduledWork(job, agent) =
+    agent tem pid
+    && job.inFlight != null
+    && ( inFlight.kinds ∋ "session_cron"     // /loop, ScheduleWakeup, CronCreate vivos
+         || inFlight.kinds ∋ "monitor"       // Monitor vivo
+         || inFlight.wake != null )          // ScheduleWakeup pendente
+  ```
+
+  O `pid` vem da entrada de `claude agents --json --all`, não do `state.json` (sem `pid` o `state.json` pode estar
+  obsoleto). `selfWake` é só uma dica. Não usar `status`, `queued`, `drainableMonitors`, `tasks > 0`, `fan` nem o
+  `detail`. Parsers toleram `inFlight`, `selfWake`, `wake`, `fan` e `drainableMonitors` ausentes.
+  **Risco aceito [spike 03/11]:** a regra não enxerga um one-shot de CronCreate pendente depois de um respawn (o
+  `state.json` mostra `kinds []`, `tasks 0`, e o cron dispara mesmo assim). Então, em linguagem simples: se uma
+  sessão foi reaberta e tinha um lembrete único agendado, o `watch` pode achar que ela está livre, parar na troca de
+  conta, e o lembrete se perde ou sai na conta antiga. Aceito para a v1. Mitigações **propostas, não testadas**: nunca
+  agir enquanto `tempo == "active"` ou `status == "busy"` (também cobre a janela de ~7 s no meio do tick do
+  ScheduleWakeup, quando os marcadores somem); tratar sessão reaberta há pouco como "assumir trabalho agendado".
 
 ### Aplicar uma troca
 
 1. Repontar o link `mux/<mux>.json` para o token da conta nova (troca atômica: link temporário +
    rename). Sessões **novas** do mux já nascem na conta nova (o settings é lido no início).
-2. Para cada sessão viva do mux iniciada antes da troca: se **livre** (`status != 'busy'` e
-   `inFlight.tasks == 0` e `inFlight.queued == 0`), `claude stop <id>` e esperar parar. Ocupadas
+2. Para cada sessão viva do mux iniciada antes da troca (`startedAt` anterior à troca; vale só para sessão viva, F14): se **livre**
+   (`status != 'busy'` e `inFlight.tasks == 0` e (`inFlight.queued == 0` ou a sessão está **presa por limite**, abaixo)
+   e sem trabalho agendado), `claude stop <id>` e esperar parar. Ocupadas
    esperam o fim do turno (o `watch` tenta de novo). **Nunca** interromper um turno.
 3. Não é preciso reescrever `respawnFlags`: eles já apontam para `mux/<mux>.json`, que agora
    aponta para a conta nova.
@@ -176,11 +221,14 @@ e pode estar no pool de vários muxes ao mesmo tempo (cada mux anda na própria 
 
 Turno que falha porque a conta bateu no limite: a sessão fica livre, cai no passo 2, e ao ser
 reaberta já está na conta nova; o usuário pede "continue".
-**Não medido** — o estado exato da sessão depois de um turno que falha por limite não está entre
-F1–F11. **[minha escolha]**: conta como livre quando `status != 'busy'` e `inFlight` vazio,
-inclusive com `state: 'blocked'` (o vigia do `claude-conta` já trata assim; visto no `vigia.log`
-de 03/11 10:57, "livre: 95b0deff blocked"). O plano começa com um spike que confirma isso; se a
-sessão ficar `busy` esperando uma escolha, a regra para esse estado entra antes do `watch`.
+**Presa por limite [spike 03/11, F12, provisória]:** a sessão conta como **presa por limite** quando
+`job.state == "blocked"` e `job.needs` começa com `rate limited` e `inFlight.tasks == 0` e `status != "busy"`;
+`inFlight.queued` pode ser 1 (fica em 1 sem trabalho nenhum, então `queued == 0` não serve como critério). Presa por
+limite conta como livre. Sessão com `tasks > 0` continua `busy`, mesmo bloqueada por limite, e espera.
+**Pergunta aberta:** o item `queued` roda de novo com o token novo quando a sessão é reaberta? Não dá para testar
+sem gastar uso de verdade (anti-objetivo); o primeiro uso real do `watch` responde. **Reabrir por comando fica fora
+da v1** (F14): o usuário reabre; `claude respawn` mantém o id mas imprime "respawned" mesmo quando a sessão cai logo depois, e `--bg --resume` com flags cria
+cópia. Ideia para a v2: `sb swap --reopen` via `respawn`, julgando o sucesso por `agents`/`state.json`.
 
 ## 5. Configuração e estado
 
@@ -358,5 +406,5 @@ Pseudo-terminal para o `setup-token`: **[builder]** (`node-pty`, `script -q /dev
 
 Histerese do retorno; intervalo do laço do `watch` (o `claude-conta` usa 30 s); formato exato do
 `--json`; layout do painel em telas estreitas; nomes internos dos módulos; detalhes de
-concorrência entre `watch` e comandos manuais (lock de arquivo); como o `pin` em segundo plano é
+concorrência entre `watch` e comandos manuais (lock de arquivo); `sb swap --reopen` via `claude respawn` (v2, F14); como o `pin` em segundo plano é
 supervisionado (processo desanexado vs fila do `watch`).

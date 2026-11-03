@@ -1,3 +1,39 @@
+# Resumo e regras (G1)
+
+Fecha os spikes 1-3 (03/11/2026, claude 2.1.317). Todas as regras abaixo são **provisórias**: n pequeno, nenhuma
+sessão forçada a bater no limite (gastaria uso, anti-objetivo). A Task 15 implementa estas regras; as fixtures
+em `test/fixtures/claude/` (README ali) cobrem cada caso.
+
+- `limit-blocked` = `job.state == "blocked"` **e** `job.needs` começa com `rate limited` **e** `inFlight.tasks == 0` **e**
+  `agents.status != "busy"`; `inFlight.queued` pode ser 1. Sessão com `tasks > 0` fica `busy` e **não** é limit-blocked,
+  mesmo bloqueada por limite. Não olhar `kinds`/`drainableMonitors` aqui. Evidência: §1, tabela (838abd23 viva `idle`,
+  `tasks 0`, `queued 1`; 3e10455e viva `busy`, `tasks 4`) e os três snapshots históricos parados (c802ba64, 64e82d8e,
+  5b3f2ad1: `blocked`, `queued 1`, `tasks 0`, `needs` `rate limited — wait and retry · …`). Provisória: nenhuma sessão
+  foi vista entrando no limite nem saindo dele.
+- `hasScheduledWork(job, agent)` = `agent` tem `pid` **e** `job.inFlight != null` **e** (`inFlight.kinds ∋ "session_cron"`
+  **ou** `inFlight.kinds ∋ "monitor"` **ou** `inFlight.wake != null`). Provisória (n = 1 por mecanismo). Evidência: §3,
+  tabelas "entre ticks" e "depois de stop + respawn", e "Regra proposta". **Não é suficiente** para um one-shot de
+  CronCreate pendente que ficou invisível depois do respawn (`kinds []`, `tasks 0`, e o cron disparou mesmo assim):
+  risco **aceito e documentado**. Mitigações **PROPOSTAS / NÃO TESTADAS**: nunca agir enquanto `tempo == "active"` ou
+  `agents.status == "busy"`; tratar sessão reaberta há pouco como "assumir trabalho agendado" (N não definido).
+- `startedAt` = `agents.startedAt` de `claude agents --json --all`: o instante em que o host foi (re)aberto, ≈ 0,5-0,7 s
+  depois da reivindicação do processo reserva (`claimed-spare`). Mudou em todo respawn testado. **Não** é o início do
+  processo do SO (`ps` mostrou lstart bem anterior). Em sessão parada vale o `createdAt` do job, então só tem sentido
+  para sessão **viva**. Task 15 (`restartStale`): comparar `startedAt < runtime.mux[mux].since` só para sessões vivas.
+  Evidência: §2, "`startedAt` de `agents --json` acompanha o início do processo?".
+- reabrir por comando: **não (v1)** — o design continua com "o usuário reabre". `claude respawn <id>` manteve
+  `id`/`sessionId`/`respawnFlags` de uma sessão parada e ociosa (pid novo), mas imprime "respawned" mesmo quando a
+  sessão cai logo depois (julgar por `agents`/`state.json`, nunca por stdout/exit). `claude --bg --resume <id>` com
+  flags criou **cópia** nas 3 tentativas; a forma sem flags não foi testada. Ideia para a v2: `sb swap --reopen` via
+  `respawn`. Evidência: §2, tabelas de respawn e de `--bg --resume`.
+- **Pergunta aberta:** o item `queued` roda de novo com o token novo ao reabrir uma sessão presa por limite? Não é
+  testável sem gastar uso de verdade (anti-objetivo); continua aberta. O observador (`vigia`) segue gravando
+  `limite.jsonl` (não versionado) e pode trazer pistas sobre o retorno automático depois do reset.
+- **Risco aceito:** o `watch` pode parar, na troca de conta, uma sessão com um one-shot de CronCreate pendente que ficou
+  invisível depois de um respawn, e o agendamento pode se perder ou ficar na conta antiga. Neste n = 1 o cron
+  sobreviveu a stop+respawn (segundo stop, com o cron invisível, não testado), então o custo parece menor que o de
+  ScheduleWakeup e Monitor, que morrem no stop.
+
 # Spike 1 — estado da sessão depois de um turno que falha por limite
 
 Ferramentas: `spikes/sessoes/cl` (claude com ambiente limpo, F10) e `spikes/sessoes/observa.py`.
@@ -62,9 +98,10 @@ semanal, reset 8/nov 20:00). Respondem parte da pergunta do passo 4 sem esperar 
    ("livre = `queued == 0`") nunca trocaria a sessão que bateu no limite. A regra tem de olhar o
    `needs`/`state`, não só `queued`.
 3. Sessão viva e presa por limite com `tasks == 0`: `status` `idle` com pid. Com `tasks > 0`
-   (agentes/bash em segundo plano ainda rodando): `status` `busy`; "busy" não implica trabalho útil.
-4. O `state` do job fica `blocked` (não `done`/`stopped`) quando a sessão para: o limite é
-   distinguível de uma sessão encerrada.
+   (agentes/bash em segundo plano ainda rodando): `status` `busy`. Só o par `busy` + `tasks > 0` foi observado.
+4. Nas três sessões históricas, paradas com o limite pendente, o `state` do job ficou `blocked`
+   (não `done`/`stopped`). Não há evidência de como distinguir, pelos campos, esse caso de uma sessão
+   encerrada por outro motivo: só se viram sessões paradas enquanto presas por limite.
 5. Ainda em aberto, a cargo do vigia (`limite.jsonl`): depois do reset, o daemon tenta de novo sozinho
    (`state` volta a `working` sem mensagem nova)? Ao reabrir, o item `queued` roda de novo?
 
@@ -83,7 +120,8 @@ uma vez, por pty (seta para baixo, Enter), que gravou `hasTrustDialogAccepted` p
 ### Resposta curta
 
 - `claude respawn <id>`: **mantém o mesmo id** (e `sessionId`), ganha pid novo e **relê os `respawnFlags` gravados**
-  (a prova está abaixo). Não cria job novo.
+  (provado só para o `--settings`, abaixo). Não cria job novo. O stdout/exit do `respawn` **não é confiável**: imprime
+  "respawned" mesmo quando a sessão cai logo depois (caso do `--settings` inexistente); julgar por `agents`/`state.json`.
 - `claude --bg --resume <id|sessionId> <flags>`: **sempre criou uma cópia** (id novo, `sessionId` novo) nos três
   testes feitos, todos com flags na linha de comando. A forma sem flags ("continua sob o mesmo ID", segundo a
   própria saída do claude) **não foi testada**: ver "Não testado".
@@ -92,9 +130,9 @@ uma vez, por pty (seta para baixo, Enter), que gravou `hasTrustDialogAccepted` p
 
 | pergunta | observado |
 |---|---|
-| mesmo id? | sim, `respawned ff1b8a7b` |
+| mesmo id? | sim, `respawned ff1b8a7b` (o texto impresso não prova sucesso: ver a prova do crash abaixo) |
 | pid novo? | sim: sem pid parada, `65289` depois |
-| processo carrega o `--settings` marcado? | `ps` **não mostra** flags: o pid é um `claude bg-spare --bg-spare …claim.sock` (processo reserva já aberto, reivindicado no respawn; log do daemon `bg claimed-spare ff1b8a7b (fleet)`). Prova indireta, observada: com `marca.json` removido, o respawn terminou com `bg settled ff1b8a7b (crashed): exit 1 before init — Error: Settings file not found: /tmp/sb-spike-XXXX/marca.json`. Ou seja, o respawn passa o `--settings` do `respawnFlags` para o processo. |
+| processo carrega o `--settings` marcado? | `ps` **não mostra** flags: o pid é um `claude bg-spare --bg-spare …claim.sock` (processo reserva já aberto, reivindicado no respawn; log do daemon `bg claimed-spare ff1b8a7b (fleet)`). Prova indireta, observada: com `marca.json` removido, o respawn terminou com `bg settled ff1b8a7b (crashed): exit 1 before init — Error: Settings file not found: /tmp/sb-spike-XXXX/marca.json`. Ou seja, o respawn passa o `--settings` do `respawnFlags` para o processo (provado só para `--settings`; os outros flags não foram verificados). |
 | `respawnFlags` persistiu? | sim, idêntico antes e depois (`--name sb-spike-reabrir --settings …/marca.json --model haiku`), também depois do respawn que crashou |
 | `sessionId` / `resumeSessionId` mudaram? | não (`<uuid omitido>` nos dois) |
 | `startedAt` mudou? | sim: `1793720229946` (parada) para `1793720293619` (rodando, 15:38:13.619Z) |
@@ -117,29 +155,29 @@ Sobre as cópias (todas observadas antes de apagá-las):
 
 | pergunta | observado |
 |---|---|
-| mesmo id? | não: id novo e `sessionId` novo; `resumeSessionId` igual ao próprio `sessionId` da cópia (não aponta para o original) |
+| mesmo id? | não: id novo e `sessionId` novo |
 | pid novo? | sim (66276, 66937, 67751); na 1a cópia o `ps` mostrou `bg-spare` sem flags (nas outras duas o `ps` não foi consultado) |
 | usa os `respawnFlags` gravados ou só os da linha de comando? | só os da linha de comando: o `respawnFlags` da cópia é exatamente o que foi passado (`--settings ativa.json --model haiku` na 1a e na 3a; `--name … --settings marca.json --model haiku` na 2a). Quanto ao nome: a 1a (sem `--name`) e a 2a (com `--name`) ficaram com `name` `sb-spike-reabrir`; a 3a (id curto, sem `--name`) ficou com o próprio id como nome |
 | `startedAt` | o da cópia é o da reivindicação do processo dela (1a: 15:38:54.280Z, criada 15:38:53.504Z); o do original não mudou |
 | jobs novos em `agents --json --all`? | sim, 1 por tentativa (52 para 53). A cópia nasce em `idle — send a prompt to start` (`job.state` `working`, `needs` "send a prompt to start", `inFlight` nulo, sem timeline) |
-| histórico da conversa na cópia | não verificado; durante o experimento só existia o `.jsonl` do original em `~/.claude/projects/` (a cópia, sem prompt, não gravou transcrição) |
+| histórico da conversa na cópia | não verificado |
 
-Conflito resolvido: o `claude-conta` ("sempre cria um job novo (cópia)") está certo **quando se passa qualquer flag**
+Conflito **parcialmente** resolvido: o `claude-conta` ("sempre cria um job novo (cópia)") está certo **quando se passa qualquer flag**
 (incluindo flags idênticos aos salvos) ou o id curto; a ajuda do 2.1.317 ("continua sob o mesmo ID") descreve a
-forma **sem flags e com o `sessionId` completo**, que não foi exercitada aqui.
+forma **sem flags e com o `sessionId` completo**; esse lado repousa só no texto de ajuda do claude, não foi exercitado aqui.
 
 ### `startedAt` de `agents --json` acompanha o início do processo?
 
 Não. Observado:
 
-- sessão rodando: `startedAt` = instante em que o daemon reivindicou o processo reserva (`claimed-spare`), não o início do
-  processo do SO. Sessão original: `ps` `lstart` 12:32:06, `startedAt` 15:37:10.717Z (12:37:10), log `claimed-spare` 15:37:10.046Z.
-  Respawn: processo aberto 12:37:10, `startedAt` 15:38:13.619Z, log 15:38:13.078Z.
-- sessão parada: `startedAt` volta a ser o `createdAt` do job (`1793720229946` = `2026-11-03T15:37:09.946Z`).
-- cada respawn bem-sucedido troca o `startedAt`.
+- sessão rodando: `startedAt` ≈ instante em que o daemon reivindicou o processo reserva (`claimed-spare`), 0,5-0,7 s depois
+  dele, não o início do processo do SO. Sessão original: `ps` `lstart` 12:32:06, `startedAt` 15:37:10.717Z (12:37:10), log
+  `claimed-spare` 15:37:10.046Z (+0,67 s). Respawn: `startedAt` 15:38:13.619Z, log `claimed-spare` 15:38:13.078Z (+0,54 s).
+- sessão parada: na parada testada, `startedAt` voltou a ser o `createdAt` do job (`1793720229946` = `2026-11-03T15:37:09.946Z`).
+- no respawn testado, o `startedAt` mudou (`1793720229946` para `1793720293619`).
 
 Para a Task 15 (saber se uma sessão é anterior a uma troca de conta): `startedAt` de sessão **rodando** serve como
-"quando este host foi (re)aberto" e muda no respawn; não serve para sessão parada (mostra a criação). Não foi
+"quando este host foi (re)aberto" e mudou no respawn testado; não serve para sessão parada (mostra a criação). Não foi
 observado se `startedAt` muda ao longo de turnos ou em `claude attach`.
 
 ### Não testado
@@ -224,9 +262,9 @@ hasScheduledWork(job, agent) =
 ```
 
 - Dica secundária (não decide sozinha): `selfWake == true`. Não usar: `status`, `queued`, `drainableMonitors`, `tasks > 0` (também vale para `local_bash`/`local_agent`, trabalho dentro do turno), `fan` (obsoleto depois do stop), nem `detail`/timeline (texto do modelo).
-- O que um `stop` faz com cada um (na sessão testada): mata ScheduleWakeup e Monitor; loop recorrente e CronCreate one-shot reapareceram após `respawn`; ticks perdidos durante a parada não são repostos.
+- O que um `stop` faz com cada um (na sessão testada): mata ScheduleWakeup e Monitor; loop recorrente e CronCreate one-shot sobreviveram ao `respawn` (o one-shot ficou invisível); ticks perdidos durante a parada não são repostos.
 - Limitações conhecidas da regra (a regra **NÃO é suficiente** para os casos 1 e 2):
-  1. **One-shot CronCreate pendente depois de `respawn`: a regra dá falso negativo.** Observado: `kinds []`, `tasks 0`, sem `wake`/`fan`, `job.state done`, de 12:53:08 a 12:58:02, e o cron disparou às 12:58:00. Antes do respawn (12:51-12:52) ele aparecia com `kinds ["session_cron"]`; a invisibilidade só foi observada depois do respawn. Nenhum campo de `state.json`/`agents` marca esse cron: **nenhuma mitigação foi encontrada nos campos observados**. Mitigações, todas **PROPOSTAS / NÃO TESTADAS**: (a) ler a transcrição `~/.claude/projects/<cwd>/<sessionId>.jsonl` e achar um uso de CronCreate sem `scheduled_task_fire` correspondente (o formato do uso da ferramenta não foi inspecionado; só se viu `system`/`scheduled_task_fire` e o id do cron no arquivo); (b) tratar sessão reaberta nos últimos N minutos como "desconhecido, assumir trabalho agendado" (conservador; N não definido). Observação, não garantia: neste n=1 o cron sobreviveu a stop+respawn e disparou, então o custo desse falso negativo parece menor que o do ScheduleWakeup e do Monitor, que morrem no stop.
+  1. **One-shot CronCreate pendente depois de `respawn`: a regra dá falso negativo.** Observado: `kinds []`, `tasks 0`, sem `wake`/`fan`, `job.state done`, de 12:53:08 a 12:58:02, e o cron disparou às 12:58:00. Antes do respawn (12:51-12:52) ele aparecia com `kinds ["session_cron"]`; a invisibilidade só foi observada depois do respawn. Nenhum campo de `state.json`/`agents` marca esse cron: **nenhuma mitigação foi encontrada nos campos observados**. Mitigações, todas **PROPOSTAS / NÃO TESTADAS**: (a) ler a transcrição `~/.claude/projects/<cwd>/<sessionId>.jsonl` e achar um uso de CronCreate sem `scheduled_task_fire` correspondente (o formato do uso da ferramenta não foi inspecionado; só se viu `system`/`scheduled_task_fire` e o id do cron no arquivo); (b) tratar sessão reaberta nos últimos N minutos como "desconhecido, assumir trabalho agendado" (conservador; N não definido). Observação, não garantia: neste n=1 o cron sobreviveu a stop+respawn e disparou, então o custo desse falso negativo parece menor que o do ScheduleWakeup e do Monitor, que morrem no stop (um segundo stop, com o cron invisível, não foi testado).
   2. **Janela de ~7 s no ScheduleWakeup, no meio do tick** (`kinds []`, `tasks 0`, sem `wake`, **sem `.pending-wakeup`**, observada em 12:51:00): olhar o `.pending-wakeup` **não** resolve (o arquivo também some nessa janela); a releitura com 2 amostras também **não foi testada** e não se recomenda como mitigação. Mitigação proposta (**PROPOSTA / NÃO TESTADA**): nunca agir enquanto `tempo == "active"` ou `agents.status == "busy"` (a troca não deve interromper um turno de qualquer forma); na janela observada o `tempo` era `active`.
   3. Falso positivo sem a condição de pid, pelo `state.json` obsoleto de sessão `done` parada (já coberto pelo `hasPid` da regra).
 - Assinatura: `hasScheduledWork(job, agent)`: o pid vem da entrada de `agents --json --all` (`agent.hasPid`), não do `state.json`; o plano diz `hasScheduledWork(state)` e precisa ser ajustado.
