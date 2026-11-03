@@ -35,6 +35,23 @@ export interface Sandbox {
   /** Grava `tokens/<conta>.json` (600) direto, sem passar pelo código sob teste. */
   addToken(account: string, token?: string): void
   calls(): FakeCall[]
+  /**
+   * Registra uma sessão no `claude` falso: acrescenta/substitui a entrada em `agents.json` (FAKE_CLAUDE_DIR) e, se vier
+   * `state`, grava `jobs/<id>/state.json`. `agent.id` é obrigatório; o resto ganha valores neutros (sem `pid`: parada).
+   */
+  addJob(job: { agent: Partial<AgentFixture> & { id: string }; state?: Record<string, unknown> }): void
+}
+
+export interface AgentFixture {
+  id: string
+  cwd: string
+  kind: string
+  startedAt: number
+  sessionId: string
+  name: string
+  state: string
+  pid: number
+  status: string
 }
 
 /**
@@ -127,6 +144,32 @@ export function sandbox(): Sandbox {
       mkdirSync(join(file, '..'), { recursive: true, mode: 0o700 })
       writeFileSync(file, JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: token } }), { mode: 0o600 })
       chmodSync(file, 0o600)
+    },
+    addJob({ agent, state }) {
+      const fakeDir = env.FAKE_CLAUDE_DIR!
+      mkdirSync(fakeDir, { recursive: true })
+      const file = join(fakeDir, 'agents.json')
+      let list: Record<string, unknown>[] = []
+      try {
+        list = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>[]
+      } catch {
+        // primeiro job
+      }
+      const entry = {
+        cwd: '/tmp/proj',
+        kind: 'background',
+        startedAt: 1_700_000_000_000,
+        sessionId: `${agent.id}-0000-4000-8000-000000000000`,
+        name: `job-${agent.id}`,
+        state: agent.pid === undefined ? 'stopped' : 'done',
+        ...agent,
+      }
+      writeFileSync(file, JSON.stringify([...list.filter((a) => a.id !== agent.id), entry], null, 2) + '\n')
+      if (state !== undefined) {
+        const jobDir = join(resolvePaths(env).jobsDir, agent.id)
+        mkdirSync(jobDir, { recursive: true })
+        writeFileSync(join(jobDir, 'state.json'), JSON.stringify(state, null, 2) + '\n')
+      }
     },
     calls() {
       try {
