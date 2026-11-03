@@ -8,13 +8,14 @@
 		"sb": "./dist/cli.js"
 	},
 	"files": [
-		"dist"
+		"dist",
+		"schema.json"
 	],
 	"engines": {
 		"node": ">=20"
 	},
 	"scripts": {
-		"build": "tsdown && bun scripts/postbuild.ts",
+		"build": "tsdown && bun scripts/gen-schema.ts && bun scripts/postbuild.ts",
 		"check": "tsc --noEmit",
 		"test": "bun test",
 		"prepublishOnly": "bun run build"

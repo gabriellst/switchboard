@@ -1,0 +1,128 @@
+{
+  "title": "switchboard config",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "switchboard": {
+      "type": "number",
+      "const": 1,
+      "description": "Versão do formato"
+    },
+    "accounts": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "description": "Registro de contas; os tokens ficam em tokens/, fora da config"
+    },
+    "swap": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "auto": {
+          "default": true,
+          "description": "O watch troca sozinho ao passar do limiar",
+          "type": "boolean"
+        },
+        "threshold": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "fiveHour": {
+              "default": 0.9,
+              "description": "Utilização (0–1] da janela de 5 h a partir da qual a conta troca",
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1
+            },
+            "sevenDay": {
+              "default": 0.95,
+              "description": "Utilização (0–1] da janela de 7 dias a partir da qual a conta troca",
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "returnOnReset": {
+          "default": true,
+          "description": "Volta à conta preferida quando a janela dela reinicia",
+          "type": "boolean"
+        },
+        "probeEvery": {
+          "default": "5m",
+          "description": "Intervalo entre medições de uso: 30s, 5m, 1h",
+          "type": "string",
+          "pattern": "^[1-9]\\d*[smh]$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "default": {
+      "description": "Mux para pastas que não casam com nenhum root; obrigatório se há mux",
+      "type": "string"
+    },
+    "mux": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Pasta raiz do mux (aceita ~)"
+          },
+          "account": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$",
+            "description": "Conta preferida; tem de estar em accounts"
+          },
+          "accounts": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            },
+            "description": "Contas que o mux pode usar"
+          },
+          "pool": {
+            "default": [],
+            "description": "Contas do hot-swap, em ordem de prioridade; subconjunto de accounts",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+            }
+          }
+        },
+        "required": [
+          "root",
+          "account",
+          "accounts"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "switchboard",
+    "accounts",
+    "mux"
+  ],
+  "additionalProperties": false
+}
