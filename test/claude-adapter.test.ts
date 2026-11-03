@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { listAgents, stopSession, type AgentEntry } from '../src/core/claude.js'
 import { EXIT, SbError } from '../src/core/errors.js'
@@ -99,6 +99,24 @@ describe('contrato: fixtures reais em test/fixtures/claude', () => {
     expect(own('66ff7788')).toEqual({ kind: 'none' })
     expect(own('77889900')).toEqual({ kind: 'legacy' })
     expect(own('88990011')).toEqual({ kind: 'pin', account: 'admin1' })
+  })
+
+  test('aa001122 (state.json obsoleto, sem pid) e 99001122 (running, sem drainableMonitors) parseiam como o README diz', () => {
+    const sb = sandbox()
+    const p = fixturePaths(sb)
+    const stale = readJobState(p, 'aa001122')!
+    expect(stale.state).toBe('done')
+    expect(stale.inFlight).toMatchObject({ tasks: 1, queued: 0, kinds: ['session_cron'], drainableMonitors: 0 })
+    expect((stale.inFlight as Record<string, unknown>).selfWake).toBe(true) // chave que o adaptador não conhece passa intacta
+    expect(ownershipOf(stale.respawnFlags, p)).toEqual({ kind: 'mux', mux: 'bk' })
+    writeFake(sb, 'agents.json', AGENTS_TEXT)
+    expect(listAgents(sb.ctx()).find((a) => a.id === 'aa001122')!.pid).toBeUndefined() // sem pid: o job é obsoleto
+
+    const running = readJobState(p, '99001122')!
+    expect(running.state).toBe('running')
+    expect(running.inFlight).toEqual({ tasks: 1, queued: 0, kinds: ['session_cron'] })
+    expect(running.inFlight!.drainableMonitors).toBeUndefined()
+    expect(ownershipOf(running.respawnFlags, p)).toEqual({ kind: 'mux', mux: 'bk' })
   })
 
   test('as fixtures cobrem mux, pin, legacy, foreign e none (um caso novo sem esperado falha aqui)', () => {
@@ -276,6 +294,22 @@ describe('ownershipOf', () => {
     expect(ownershipOf(['--settings', muxLink(p, 'outro')], p)).toEqual({ kind: 'mux', mux: 'outro' })
   })
 
+  test('os dois sentidos do link final: arquivo REGULAR em mux/ é mux; link de dir estranho que aponta para tokens/ é foreign', () => {
+    const sb = populatedSandbox()
+    const p = sb.paths
+    // arquivo regular dentro de mux/ (não link): é do mux pelo caminho
+    writeFileSync(join(p.stateDir, 'mux', 'regular.json'), '{}')
+    expect(ownershipOf(['--settings', join(p.stateDir, 'mux', 'regular.json')], p)).toEqual({ kind: 'mux', mux: 'regular' })
+    // link num diretório de terceiros apontando PARA DENTRO de tokens/: o alvo não conta, o caminho é de terceiros
+    const tok = join(p.stateDir, 'tokens')
+    writeFileSync(join(tok, 'alvo.json'), '{}')
+    const foreignDir = join(sb.dir, 'terceiros')
+    mkdirSync(foreignDir)
+    const viaLink = join(foreignDir, 'tok.json')
+    symlinkSync(join(tok, 'alvo.json'), viaLink)
+    expect(ownershipOf(['--settings', viaLink], p)).toEqual({ kind: 'foreign', path: viaLink })
+  })
+
   test('o diretório é comparado por realpath (diretório pai via symlink, `..`, `~`)', () => {
     const sb = populatedSandbox()
     const p = sb.paths
@@ -376,6 +410,17 @@ describe('stopSession', () => {
     expect(a.state).toBe('stopped')
   })
 
+  test('sleep padrão (sem injetar): stop-lag 2 termina em poucas dezenas de ms e devolve true', () => {
+    const sb = sandbox()
+    sb.addJob({ agent: { id: 'a1b2c3d4', pid: 4242, status: 'idle', state: 'done' } })
+    writeFake(sb, 'stop-lag', '2')
+    const t0 = performance.now()
+    expect(stopSession(sb.ctx(), 'a1b2c3d4', 2000, { pollMs: 1 })).toBe(true)
+    const ms = performance.now() - t0
+    expect(ms).toBeLessThan(1500) // o prazo é 2 s: terminou porque o pid sumiu, não por estourar o tempo
+    expect(sb.calls().filter((c) => c.argv[0] === 'agents').length).toBe(2)
+  })
+
   test('pid some logo: uma consulta só e sem dormir', () => {
     const sb = sandbox()
     sb.addJob({ agent: { id: 'a1b2c3d4', pid: 4242, status: 'idle' } })
@@ -473,6 +518,16 @@ describe('writeJobFlags', () => {
     expect(statSync(file).mode & 0o777).toBe(0o644)
     expect(readdirSync(join(sb.paths.jobsDir, 'a1b2c3d4'))).toEqual(['state.json']) // sem temporário
     expect(readJobState(sb.paths, 'a1b2c3d4')!.respawnFlags.at(-1)).toBe('/tmp/b.json')
+  })
+
+  test.each([0o600, 0o644])('preserva o modo original do state.json (%o) e o backup fica 600 em diretório 700', (mode) => {
+    const { sb, file } = setup()
+    chmodSync(file, mode)
+    const backup = join(sb.paths.stateDir, 'novo-backup', 'a1b2c3d4.state.json') // diretório ainda inexistente: nasce 700
+    expect(writeJobFlags(sb.paths, 'a1b2c3d4', (f) => [...f, '--settings=' + JSON.stringify({ env: { X: 'segredo' } })], backup)).toBe(true)
+    expect(statSync(file).mode & 0o777).toBe(mode) // 600 não vira legível por todos
+    expect(statSync(backup).mode & 0o777).toBe(0o600)
+    expect(statSync(join(sb.paths.stateDir, 'novo-backup')).mode & 0o777).toBe(0o700)
   })
 
   test('relê antes de gravar: campo que o daemon mudou entre a leitura e a escrita sobrevive', () => {

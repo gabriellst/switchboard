@@ -81,6 +81,15 @@ export function readJobState(paths: Paths, id: string): JobState | null {
   return load(jobFile(paths, id), id)?.state ?? null
 }
 
+/** Permissões atuais do arquivo (só os 9 bits); 644 se não der para ler. */
+const modeOf = (file: string): number => {
+  try {
+    return statSync(file).mode & 0o777
+  } catch {
+    return 0o644
+  }
+}
+
 const sameList = (a: string[], b: string[]): boolean => a.length === b.length && a.every((v, i) => v === b[i])
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string')
 
@@ -88,7 +97,8 @@ const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every
  * Reescreve só `respawnFlags` (`transform` recebe o argv atual). O CHAMADOR garante que a sessão está PARADA: o
  * daemon regrava o `state.json` enquanto ela vive. Passos: copia o arquivo para `backup` (um arquivo; se for um
  * diretório existente, vira `<backup>/<id>.state.json`), RELÊ o `state.json` imediatamente antes de gravar (o que o
- * daemon mudou nesse meio-tempo sobrevive; o backup passa a guardar a versão relida), grava atômico 644 e confere
+ * daemon mudou nesse meio-tempo sobrevive; o backup passa a guardar a versão relida), grava atômico PRESERVANDO o modo do arquivo (600 não vira
+ * legível por todos: `respawnFlags` pode ter um `--settings` inline com env; 644 se não der para ler o modo) e confere
  * relendo. `false`: sem `state.json`, `transform` devolveu algo que não é lista de texto, ou a conferência falhou.
  */
 export function writeJobFlags(
@@ -113,7 +123,7 @@ export function writeJobFlags(
   if (!isStringArray(next)) return false
   if (sameList(next, cur.state.respawnFlags)) return true
   const text = JSON.stringify({ ...cur.raw, respawnFlags: next }, null, 2) + (cur.text.endsWith('\n') ? '\n' : '')
-  writeAtomic(file, text, 0o644)
+  writeAtomic(file, text, modeOf(file))
   const after = load(file, id)
   return after !== null && sameList(after.state.respawnFlags, next)
 }
