@@ -478,7 +478,7 @@ test('usage.json não contém token', ...)
   - `desiredAccount(input: { name: string; mux: MuxConfig; current: string; usage: UsageFile; swap: SwapConfig; override?: { account: string; until: number }; nowMs: number }): MuxEval`
   - `HYSTERESIS = 0.10`
 
-`availability`: sem medição → `unknown`; `no-token`/`dead-token` → `exhausted`; outros erros → `unknown`. Com margem `m = returning ? HYSTERESIS : 0`: janela esgotada se `utilization ≥ limite − m` **ou** `status` não começa com `allowed`; esgotada **e** `nowMs/1000 < resetsAt` → `exhausted`; o `status` geral `rejected` com `resetsAt` futuro → `exhausted`; senão `available`.
+`availability`: sem medição → `unknown`; `no-token`/`dead-token` → `exhausted`; **`rate-limited` → `exhausted`** (ruling do controlador após a revisão da Task 8: um 429 da sonda, mesmo sem cabeçalhos legíveis, é o sinal de conta esgotada; não há reset conhecido, então vale até a próxima medição `ok` e a histerese do retorno não se aplica); outros erros (`network`, `unexpected`) → `unknown`. Com margem `m = returning ? HYSTERESIS : 0`: janela esgotada se `utilization ≥ limite − m` **ou** `status` não começa com `allowed`; esgotada **e** `nowMs/1000 < resetsAt` → `exhausted`; o `status` geral `rejected` com `resetsAt` futuro → `exhausted`; senão `available`.
 
 `desiredAccount`, nesta ordem (algoritmo, não deduzível dos testes):
 ```
