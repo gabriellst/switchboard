@@ -56,7 +56,8 @@ export interface MuxEval {
  *    current ≠ pref): `!returnOnReset` e current ≠ pref e current no pool e disponível → fica (sticky);
  *    senão a preferida.
  * 4. preferida esgotada e fora do pool → fica nela, com aviso.
- * 5. 1ª conta do pool, na ordem, que não seja da preferida (nem duplicata dela), sem repetir
+ * 5. `current` se já é destino válido (no pool, ≠ preferida e não duplicata dela, `available`);
+ *    senão a 1ª conta do pool, na ordem, que não seja da preferida (nem duplicata dela), sem repetir
  *    grupo de duplicatas, e disponível. Destinos usam `availability` SEM histerese.
  * 6. nenhuma → current, ou a preferida se current não está em `mux.accounts`; com aviso.
  *
@@ -102,6 +103,15 @@ export function desiredAccount(input: {
   }
 
   const prefGroup = groupOf(usage, pref)
+  // Sem salto entre reservas: cada troca custa parar e reabrir sessões, e a ordem do pool serve para
+  // ESCOLHER destino, não para pular quando uma reserva anterior se recupera. Se `current` já é um
+  // destino válido (no pool, não é a preferida nem duplicata dela, e `available` sem histerese),
+  // fica nela (reason 'pool', desired === current). `unknown` NÃO vale como válida aqui: uma reserva
+  // com erro de rede só é deixada se outra estiver `available`; se nenhuma estiver, o passo 6
+  // ('none-available') mantém `current`.
+  if (current !== pref && pool.includes(current) && !prefGroup.includes(current) && avail(current) === 'available') {
+    return done(current, 'pool')
+  }
   const seen = new Set<string>()
   for (const c of pool) {
     if (prefGroup.includes(c)) continue

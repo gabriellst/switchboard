@@ -205,6 +205,38 @@ describe('desiredAccount', () => {
     expect(r.warn).toBeString()
   })
 
+  describe('reserva atual válida não pula entre reservas (passo 5)', () => {
+    const mux = { pool: ['gabriel', 'admin1', 'outra'], accounts: ['gabriel', 'admin1', 'outra', 'cliente-x'] }
+    test('atual (reserva) disponível fica, mesmo com reserva anterior recuperada', () => {
+      const latest = { gabriel: mk(0.95, 0.1), admin1: mk(0.2, 0.2), outra: mk(0.3, 0.3) }
+      expect(eval_(latest, { mux, current: 'outra' })).toMatchObject({ desired: 'outra', current: 'outra', reason: 'pool' })
+    })
+    test('atual esgotada → 1ª disponível do pool', () => {
+      const latest = { gabriel: mk(0.95, 0.1), admin1: mk(0.2, 0.2), outra: mk(0.95, 0.3) }
+      expect(eval_(latest, { mux, current: 'outra' })).toMatchObject({ desired: 'admin1', reason: 'pool' })
+    })
+    test('atual sem medição (unknown) não é mantida se outra está disponível', () => {
+      const latest = { gabriel: mk(0.95, 0.1), admin1: mk(0.2, 0.2), outra: err('network') }
+      expect(eval_(latest, { mux, current: 'outra' })).toMatchObject({ desired: 'admin1', reason: 'pool' })
+    })
+    test('atual unknown e nenhuma outra disponível → none-available mantém a atual', () => {
+      const latest = { gabriel: mk(0.95, 0.1), admin1: mk(0.95, 0.2), outra: err('network') }
+      expect(eval_(latest, { mux, current: 'outra' })).toMatchObject({ desired: 'outra', reason: 'none-available' })
+    })
+    test('atual que é duplicata da preferida não é mantida', () => {
+      const latest = { gabriel: mk(0.95, 0.1), admin1: mk(0.2, 0.2), outra: mk(0.1, 0.1) }
+      expect(eval_(latest, { mux, current: 'outra', groups: [['gabriel', 'outra']] })).toMatchObject({ desired: 'admin1', reason: 'pool' })
+    })
+    test('preferida volta a ficar disponível (abaixo do limiar − histerese) → vence a reserva atual', () => {
+      const latest = { gabriel: mk(0.75, 0.1), admin1: mk(0.2, 0.2), outra: mk(0.3, 0.3) }
+      expect(eval_(latest, { mux, current: 'outra' })).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
+    })
+    test('atual fora do pool (ex.: alvo de override removido do pool) → 1ª disponível', () => {
+      const latest = { gabriel: mk(0.95, 0.1), admin1: mk(0.2, 0.2), outra: mk(0.3, 0.3), 'cliente-x': mk(0.1, 0.1) }
+      expect(eval_(latest, { mux, current: 'cliente-x' })).toMatchObject({ desired: 'admin1', reason: 'pool' })
+    })
+  })
+
   describe('rate-limited / erros na preferida', () => {
     test('rate-limited na preferida → troca para o pool', () => {
       expect(eval_({ gabriel: err('rate-limited'), admin1: mk(0.2, 0.3) })).toMatchObject({ desired: 'admin1', reason: 'pool' })
