@@ -489,12 +489,12 @@ test('usage.json não contém token', ...)
      senão (esgotada, ou unknown e current ≠ override)      → segue para 3 com o override anulado ("fila normal": a preferida volta a valer)
 3. pref: R = current ≠ pref ∧ current ∈ accounts ∧ current ∉ groupOf(pref)   (é "reserva" → histerese de retorno; current ∉ accounts ou duplicata da pref não é reserva)
    pa = availability(pref, { returning: R })
-   current == pref ou duplicata de pref: pa ≠ exhausted → current/pref 'preferred'
+   current == pref ou duplicata de pref que esteja em mux.accounts (duplicata fora de accounts não conta como "fica": vale a regra do passo 6 → pref): pa ≠ exhausted → current/pref 'preferred'
    current ≠ pref (reserva ou fora de accounts):
-     pa == available → se !returnOnReset ∧ current ∈ pool ∧ availability(current) == available → current 'sticky', senão pref 'preferred'
+     pa == available → se !returnOnReset ∧ current ∈ pool ∧ stay(current) → current 'sticky' (unknown também fica), senão pref 'preferred'
      pa == unknown   → se stay(current) → current 'sticky' (não há evidência para sair); senão pref 'preferred'
      pa == exhausted → segue
-4. pref ∉ pool                                  → pref               'preferred-outside-pool' (warn)
+4. pref ∉ pool ∧ current é a pref (ou duplicata da pref ∈ accounts) → current/pref 'preferred-outside-pool' (warn: "fica nela"); se current é OUTRA conta, pula para 5 (a preferida fora do pool não é destino de troca)
 5. se current ∈ pool ∧ current ≠ pref ∧ current ∉ groupOf(pref) ∧ availability(current) ≠ 'exhausted' (available OU unknown, sem histerese)
                                                 → current            'pool'  (fica: trocar custa parar sessões; a ordem do pool escolhe destino, não faz saltar entre reservas)
    senão a 1ª conta c do pool, na ordem, com c ∉ groupOf(pref), sem repetir grupo já visto, availability(c) == available → c 'pool'  (destino: só `available`, sem histerese)
