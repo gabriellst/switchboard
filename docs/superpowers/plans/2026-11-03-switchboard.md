@@ -233,7 +233,7 @@ git commit -m "docs: F12–F14 dos spikes de sessão; fixtures do adaptador"
 ### Task 5: Esqueleto, erros, paths, Ctx, claude falso, teste de higiene
 
 **Files:**
-- Create: `package.json`, `tsconfig.json`, `tsdown.config.ts`, `.gitignore`, `scripts/postbuild.ts`, `src/cli.ts`, `src/commands/guard.ts`, `src/core/errors.ts`, `src/core/paths.ts`, `src/core/ctx.ts`, `src/core/claude.ts`, `test/helpers.ts`, `test/fake-claude.ts`, `test/paths.test.ts`, `test/claude-env.test.ts`, `test/hygiene.test.ts`
+- Create: `package.json`, `tsconfig.json`, `tsdown.config.ts`, `.gitignore` (node_modules, dist, *.log, .DS_Store, `spikes/sessoes/limite.jsonl`, `spikes/sessoes/vigia.pid`), `scripts/postbuild.ts`, `src/cli.ts`, `src/commands/guard.ts`, `src/core/errors.ts`, `src/core/paths.ts`, `src/core/ctx.ts`, `src/core/claude.ts`, `test/helpers.ts`, `test/fake-claude.ts`, `test/paths.test.ts`, `test/claude-env.test.ts`, `test/hygiene.test.ts`
 
 **Interfaces:**
 - Produces:
@@ -977,6 +977,6 @@ test('saída e backup de log sem token', ...)
 - [ ] **Step 1: Escrever `README.md`** (instalação local, começando: `sb login`, `sb mux add`, `sb agents`, painel, troca, pin, watch/install, migração) **e `SPEC.md`** (modelo, regras de troca com o algoritmo da Task 10, F1–F14, estado em disco, comandos, exit codes, códigos do `doctor`), em português, no tom do plugboard.
 - [ ] **Step 2: Verificar tudo** — Run: `bun test && bun run check && bun run build && node dist/cli.js --version && node dist/cli.js --help` · Expected: testes PASS, sem erro de tipo, `0.1.0`, ajuda com todos os comandos.
 - [ ] **Step 3: Varredura de higiene** — Run: `grep -rnE "sk-ant-oat01-[A-Za-z0-9_-]{20,}" src scripts docs spikes test README.md SPEC.md` · Expected: nenhuma linha (os testes montam o token falso por concatenação).
-- [ ] **Step 4: Parar o observador da Task 1** se ainda vivo (`kill $(cat spikes/sessoes/vigia.pid)`) e commitar o `limite.jsonl` final.
+- [ ] **Step 4: Parar o observador da Task 1** se ainda vivo (`kill $(cat spikes/sessoes/vigia.pid)`) e, depois da varredura de `sk-ant` e de dado sensível, commitar o `limite.jsonl` final com `git add -f spikes/sessoes/limite.jsonl` (ele está no `.gitignore` desde a Task 5).
 - [ ] **Step 5: Commit** — `git add -A && git commit -m "docs: README e SPEC do switchboard"`
 - [ ] **Step 6: Entregar ao usuário os comandos que só ele roda**, nesta ordem: `ln -s "$PWD/dist/cli.js" ~/.local/bin/sb`; `sb migrate --simular`; `sb migrate`; reabrir cada aba do cmux com `sb agents <mux>`; `sb doctor`; mais tarde `sb migrate --finish`.
