@@ -732,6 +732,7 @@ Precedência de `activityOf`:
 !live (sem pid)                                         → 'stopped'  (vale mesmo com job blocked/limite; estado do job é obsoleto sem pid)
 s.agent.id == callerJobId                               → 'busy'     (nunca parar quem chamou)
 live ∧ job == null (state.json ausente, ilegível ou com formato inesperado) → 'busy'  (ruling do controlador após a revisão da Task 15: NUNCA parar o que não conseguimos ler — um schema que mude numa atualização do Claude esconderia cron/monitor; o aviso vai para o log)
+live ∧ job.inFlight ausente (state.json legível, sem a chave `inFlight`) → 'busy'  (ruling do controlador após a revisão da Task 17: não dá para confirmar que não há turno nem agendamento — 2 de 51 jobs reais não tinham a chave; falha fechada, como o caso acima)
 hasScheduledWork                                        → 'scheduled'
 isLimitBlocked                                          → 'limit-blocked'
 status == 'busy' || tasks > 0 || queued > 0             → 'busy'
@@ -873,6 +874,7 @@ test('painel mostra a linha de sessões fixas', ...)
 - Modify: `src/cli.ts`, `test/hygiene.test.ts` (`['watch','--once','--json']`)
 
 **Interfaces:**
+- Notas do review da Task 17 (o `restartStale` roda em todo mux a cada ciclo): (a) limite de paradas por ciclo (no máximo 3 `stopSession` por tick, o resto fica para o próximo) e recuo em falha de parada (marca `runtime.notified['stopfail:<id>:<since>']`: não tentar de novo no mesmo `since`, notificar uma vez), senão uma sessão que não para trava o ciclo por 45 s a cada tick; (b) podar `runtime.notified` (chaves `warn:*`, `sched:*`, `stopfail:*` com mais de 7 dias ou de sessões que não existem mais); (c) `sb swap` repetido numa troca que falhou no meio (`claude agents` falhou depois do `pointMux`) não refaz as paradas — só o `watch` converge; quando o link já aponta para a conta mas `lastSwap.to !== current` por queda entre `pointMux` e a gravação de `since`, o `watch` grava `since` (sem isso nunca reinicia essas sessões).
 - Nota do review da Task 15: quem faz polling (Tasks 17/19) usa `loadSessionsWithWarnings` (devolve `{ sessions, warnings }`) e DEDUPLICA os avisos (por id+motivo), senão `loadSessions` repete a linha em `watch.log` a cada ciclo.
 - Consumes: `measureAll`, `readUsage` (9); `desiredAccount` (10); `applySwap`, `restartStale` (17); `applyPending` (18); `loadSessions`, `isLimitBlocked` (15); `withLock`, runtime (7); `parseDuration` (6).
 - Produces:
