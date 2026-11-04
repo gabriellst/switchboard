@@ -21,6 +21,8 @@ const main = defineCommand({
     agents: () => import('./commands/agents.js').then((m) => m.default),
     run: () => import('./commands/run.js').then((m) => m.default),
     swap: () => import('./commands/swap.js').then((m) => m.default),
+    pin: () => import('./commands/pin.js').then((m) => m.default),
+    unpin: () => import('./commands/unpin.js').then((m) => m.default),
   },
 })
 

@@ -16,6 +16,8 @@ const CASES: Array<[string[], number]> = [
   [['attach', 'admin1', 'bk', '--pool'], 0], // admin1 já está no pool do bk: idempotente
   [['detach', 'admin1', 'bk'], 0],
   [['swap', 'bk', 'admin1', '--json'], 0],
+  [['pin', 'aaaaaaaa', 'admin1', '--json'], 3], // sessão inexistente: recusa limpa, nada gravado
+  [['unpin', 'aaaaaaaa'], 3],
   [['accounts', 'rm', 'admin1'], 3], // sem --yes: recusa
   [['login', 'x', '--terminal'], 3], // entrada vazia: cancela, nada gravado
   [['attach', 'nova', 'bk'], 1], // conta inexistente: login desanexado com o claude falso (sem token impresso) → falha, sem vazar

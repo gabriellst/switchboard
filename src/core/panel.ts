@@ -1,6 +1,7 @@
 import type { Config, Threshold } from './config.js'
 import { currentAccount } from './links.js'
 import type { Paths } from './paths.js'
+import type { Session } from './sessions.js'
 import type { Runtime } from './runtime.js'
 import { KEYCHAIN } from './schema.js'
 import { tokenStatus } from './tokens.js'
@@ -21,7 +22,7 @@ export interface PanelData {
   total: ReturnType<typeof poolTotal>
   auto: boolean
   threshold: Threshold
-  /** sessões fixas (Task 18); vazio até lá */
+  /** sessões fixas (`owner.kind == 'pin'`, vivas ou paradas); vazio se não deu para listar as sessões */
   pins: Array<{ jobId: string; account: string }>
   measuredAt: number | null
 }
@@ -58,7 +59,7 @@ function sameAsOf(cfg: Config, usage: UsageFile, account: string): string | unde
   return rep !== account && rep in cfg.accounts ? rep : undefined
 }
 
-export function buildPanel(cfg: Config, usage: UsageFile, runtime: Runtime, paths: Paths): PanelData {
+export function buildPanel(cfg: Config, usage: UsageFile, runtime: Runtime, paths: Paths, sessions: Session[] = []): PanelData {
   const registry = Object.keys(cfg.accounts)
   const usesKeychain = Object.values(cfg.mux).some((m) => m.accounts.includes(KEYCHAIN))
   const names = usesKeychain ? [...registry, KEYCHAIN] : registry
@@ -83,7 +84,7 @@ export function buildPanel(cfg: Config, usage: UsageFile, runtime: Runtime, path
     total: poolTotal(cfg, usage),
     auto: cfg.swap.auto,
     threshold: cfg.swap.threshold,
-    pins: [],
+    pins: sessions.flatMap((s) => (s.owner.kind === 'pin' ? [{ jobId: s.agent.id, account: s.owner.account }] : [])),
     measuredAt: times.length > 0 ? Math.max(...times) : null,
   }
 }
