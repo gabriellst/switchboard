@@ -203,8 +203,10 @@ export interface SwapReport {
   waitingBusy: string[]
   keptScheduled: string[]
   failed: Array<{ id: string; error: string }>
-  /** override manual ativo depois da troca (`until` em ms) */
-  override: { account: string; until: number } | null
+  /** a sessão que chamou (`CLAUDE_JOB_DIR`) está entre as que esperam (nunca é parada pelo comando) */
+  callerWaiting: boolean
+  /** override manual ativo depois da troca (`until` em ms); `resetKnown`: o prazo é o reset medido da preferida, não a estimativa agora + 5 h */
+  override: { account: string; until: number; resetKnown: boolean } | null
 }
 
 /** `sb swap`: o que mudou e o que ficou esperando. */
@@ -212,10 +214,15 @@ export function renderSwap(r: SwapReport, opts: RenderOpts): string {
   const lines: string[] = []
   if (r.noop) lines.push(`mux ${r.mux} já está em ${r.to}: nada a trocar`)
   else lines.push(`mux ${r.mux}: ${r.from} → ${r.to}`)
-  if (r.override) lines.push(`manual até ${formatReset(r.override.until / 1000, opts.nowMs, opts.timeZone)} (reset da preferida); \`sb swap ${r.mux} --clear\` desfaz`)
+  if (r.override) {
+    const until = formatReset(r.override.until / 1000, opts.nowMs, opts.timeZone)
+    const why = r.override.resetKnown ? 'reset da preferida' : '~5 h: a preferida não tem reset conhecido'
+    lines.push(`manual até ${until} (${why}); \`sb swap ${r.mux} --clear\` desfaz`)
+  }
   if (!r.noop) {
     if (r.stopped.length > 0) lines.push(`paradas (reabra para usar ${r.to}): ${r.stopped.join(', ')}`)
-    if (r.waitingBusy.length > 0) lines.push(`aguardando o fim do turno (a sessão que chamou também): ${r.waitingBusy.join(', ')}`)
+    if (r.waitingBusy.length > 0) lines.push(`aguardando o fim do turno: ${r.waitingBusy.join(', ')}`)
+    if (r.callerWaiting) lines.push('a sessão que chamou este comando NÃO será parada por ele: o watch a reinicia quando o turno dela terminar')
     if (r.keptScheduled.length > 0) lines.push(`mantidas, com trabalho agendado: ${r.keptScheduled.join(', ')}`)
     for (const f of r.failed) lines.push(`não consegui parar ${f.id}: ${f.error}`)
     if (r.stopped.length + r.waitingBusy.length + r.keptScheduled.length + r.failed.length === 0) lines.push('nenhuma sessão antiga para reiniciar')

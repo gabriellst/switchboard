@@ -5,6 +5,8 @@ import { EXIT, SbError } from '../core/errors.js'
 import { withLock } from '../core/fsx.js'
 import { assertSafeName } from '../core/paths.js'
 import { readRuntime } from '../core/runtime.js'
+import { callerJobId } from '../core/sessions.js'
+import { readUsage } from '../core/usage.js'
 import { currentAccount } from '../core/links.js'
 import { manualSwap, type RestartOptions } from '../core/swap.js'
 import { renderSwap, type SwapReport } from '../report.js'
@@ -35,12 +37,16 @@ export async function runSwap(ctx: Ctx, args: SwapArgs, opts: { waitMs?: number 
       const cfg = await loadConfig(ctx.paths)
       const r = manualSwap(ctx, cfg, args.mux, args.account, { clear: args.clear === true }, restart)
       const o = readRuntime(ctx.paths).overrides[args.mux]
-      const override = o !== undefined && o.until > ctx.now() ? { account: o.account, until: o.until } : null
+      const pref = cfg.mux[args.mux]?.account
+      const m = pref === undefined ? undefined : readUsage(ctx.paths).latest[pref]
+      const knownReset = m?.ok === true ? m.fiveHour.resetsAt * 1000 : undefined
+      const override = o !== undefined && o.until > ctx.now() ? { account: o.account, until: o.until, resetKnown: o.until === knownReset } : null
       if ('noop' in r) {
         const at = currentAccount(ctx.paths, args.mux) ?? ''
-        return { mux: args.mux, noop: true, from: at, to: at, stopped: [], waitingBusy: [], keptScheduled: [], failed: [], override }
+        return { mux: args.mux, noop: true, from: at, to: at, stopped: [], waitingBusy: [], keptScheduled: [], failed: [], callerWaiting: false, override }
       }
-      return { ...r, noop: false, override }
+      const caller = callerJobId(ctx.env)
+      return { ...r, noop: false, callerWaiting: caller !== undefined && r.waitingBusy.includes(caller), override }
     },
     waitMs === undefined ? {} : { waitMs },
   )

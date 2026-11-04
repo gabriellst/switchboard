@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runSwap } from '../src/commands/swap.js'
+import { renderSwap, type SwapReport } from '../src/report.js'
 import { loadConfig } from '../src/core/config.js'
 import type { Ctx } from '../src/core/ctx.js'
-import { EXIT, SbError } from '../src/core/errors.js'
+import { EXIT, SbError, type ExitCode } from '../src/core/errors.js'
 import { withLock } from '../src/core/fsx.js'
 import { currentAccount, pointMux } from '../src/core/links.js'
 import { logFile, muxLink, pinLink, runtimeFile, tokenFile, usageFile } from '../src/core/paths.js'
@@ -157,6 +158,30 @@ const watchLog = (sb: Sandbox): string => {
   }
 }
 
+/** Bytes de tudo o que uma troca recusada não pode mexer: link do mux, runtime.json, config e watch.log. */
+function snapshot(sb: Sandbox): Record<string, string | null> {
+  const bytes = (f: string): string | null => {
+    try {
+      return readFileSync(f, 'utf8')
+    } catch {
+      return null
+    }
+  }
+  const link = (f: string): string | null => {
+    try {
+      return lstatSync(f).isSymbolicLink() ? `-> ${readlinkSync(f)}` : `arquivo: ${readFileSync(f, 'utf8')}`
+    } catch {
+      return null
+    }
+  }
+  return {
+    link: link(muxLink(sb.paths, 'bk')),
+    runtime: bytes(runtimeFile(sb.paths)),
+    config: bytes(sb.paths.configFile),
+    watchLog: bytes(logFile(sb.paths, 'watch')),
+  }
+}
+
 async function catching(fn: () => unknown): Promise<SbError> {
   try {
     await fn()
@@ -186,6 +211,43 @@ describe('applySwap', () => {
     expect(st.respawnFlags).toEqual(flags(muxLink(sb.paths, 'bk')))
     // lastSwap e since
     expect(readRuntime(sb.paths).mux.bk).toEqual({ since: NOW, lastSwap: { at: NOW, from: 'gabriel', to: 'admin1', reason: 'teste' } })
+  })
+
+  test('viva com state.json legível mas SEM inFlight: nunca parada, vai para waitingBusy', async () => {
+    const sb = world()
+    addAll(sb)
+    const noFlight = 'abcdef0d'
+    sb.addJob({ agent: { id: noFlight, startedAt: OLD, pid: 4242, status: 'idle' }, state: { respawnFlags: flags(muxLink(sb.paths, 'bk')), state: 'done' } })
+    const cfg = await loadConfig(sb.paths)
+    const o = applySwap(ctxAt(sb), cfg, { mux: 'bk', to: 'admin1', reason: 'teste' }) as { stopped: string[]; waitingBusy: string[] }
+    expect(o.stopped).toEqual([IDS.a, IDS.b])
+    expect(o.waitingBusy).toEqual([IDS.c, noFlight])
+    expect(stops(sb)).not.toContain(noFlight)
+    expect(live(sb, noFlight)).toBe(true)
+  })
+
+  test('limite: sessão com startedAt == since (igual, não anterior) NÃO é parada', async () => {
+    const sb = world()
+    addAll(sb)
+    addSession(sb, IDS.a, flags(muxLink(sb.paths, 'bk')), 'free', { startedAt: NOW })
+    const cfg = await loadConfig(sb.paths)
+    const o = applySwap(ctxAt(sb), cfg, { mux: 'bk', to: 'admin1', reason: 'teste' }) as { stopped: string[] }
+    expect(o.stopped).toEqual([IDS.b])
+    expect(stops(sb)).toEqual([IDS.b])
+    expect(live(sb, IDS.a)).toBe(true)
+  })
+
+  test('claude agents falha depois do pointMux → exit 4, o link já trocou, nada parado, e a dica diz que o watch tenta de novo', async () => {
+    const sb = world()
+    addAll(sb)
+    const cfg = await loadConfig(sb.paths)
+    const ctx = hooked(sb, (args) => (args[0] === 'agents' ? { status: 1, stderr: 'boom' } : undefined))
+    const err = await catching(() => applySwap(ctx, cfg, { mux: 'bk', to: 'admin1', reason: 'teste' }))
+    expect(err.exit).toBe(EXIT.CLAUDE)
+    expect(err.message).toContain('o link já aponta para admin1')
+    expect(err.detail).toContain('watch')
+    expect(currentAccount(sb.paths, 'bk')).toBe('admin1')
+    expect(stops(sb)).toEqual([])
   })
 
   test('swap para a conta atual → noop, nada é tocado', async () => {
@@ -417,6 +479,66 @@ describe('manualSwap', () => {
     expect(readRuntime(sb.paths).overrides).toEqual({})
   })
 
+  describe('troca manual RECUSADA não deixa nada para trás (link, runtime.json, config e watch.log byte a byte)', () => {
+    const cases: Array<[string, (sb: Sandbox) => void, string | undefined, { clear?: boolean }, ExitCode]> = [
+      ['link do mux ausente', (sb) => rmSync(muxLink(sb.paths, 'bk')), 'admin1', {}, EXIT.CHECK_FAILED],
+      ['link do mux é um arquivo comum (conta atual ilegível)', (sb) => { rmSync(muxLink(sb.paths, 'bk')); writeFileSync(muxLink(sb.paths, 'bk'), '{}') }, 'admin1', {}, EXIT.CHECK_FAILED],
+      ['link ausente, sem conta', (sb) => rmSync(muxLink(sb.paths, 'bk')), undefined, {}, EXIT.CHECK_FAILED],
+      ['link ausente, --clear', (sb) => rmSync(muxLink(sb.paths, 'bk')), undefined, { clear: true }, EXIT.CHECK_FAILED],
+      ['conta de destino sem token', (sb) => rmTokenOf(sb, 'admin1'), 'admin1', {}, EXIT.USAGE],
+      ['conta fora de accounts', () => undefined, 'solo', {}, EXIT.USAGE],
+      ['mux inexistente', () => undefined, 'admin1', {}, EXIT.USAGE],
+    ]
+    test.each(cases)('%s', async (name, setup, account, o, code) => {
+      const sb = world()
+      addAll(sb)
+      const cfg = await loadConfig(sb.paths)
+      setup(sb)
+      const before = snapshot(sb)
+      const mux = name === 'mux inexistente' ? 'nada' : 'bk'
+      const err = await catching(() => manualSwap(ctxAt(sb), cfg, mux, account, o))
+      expect(err.exit).toBe(code)
+      expect(snapshot(sb)).toEqual(before)
+      expect(stops(sb)).toEqual([])
+    })
+
+    test('mux sem pool com link ausente: não apaga override nem grava nada', async () => {
+      const sb = world()
+      const cfg = await loadConfig(sb.paths)
+      const rt = readRuntime(sb.paths)
+      rt.overrides.berzerk = { account: 'admin1', until: NOW + 1000 }
+      writeRuntime(sb.paths, rt)
+      rmSync(muxLink(sb.paths, 'berzerk'))
+      const before = readFileSync(runtimeFile(sb.paths), 'utf8')
+      expect((await catching(() => manualSwap(ctxAt(sb), cfg, 'berzerk', 'admin1'))).exit).toBe(EXIT.CHECK_FAILED)
+      expect(readFileSync(runtimeFile(sb.paths), 'utf8')).toBe(before)
+    })
+
+    test('trocar para a preferida com link ausente: o override existente também fica', async () => {
+      const sb = world()
+      const cfg = await loadConfig(sb.paths)
+      manualSwap(ctxAt(sb), cfg, 'bk', 'admin1')
+      pointMux(sb.paths, 'bk', 'admin1')
+      rmSync(muxLink(sb.paths, 'bk'))
+      const before = snapshot(sb)
+      expect((await catching(() => manualSwap(ctxAt(sb), cfg, 'bk', 'gabriel'))).exit).toBe(EXIT.CHECK_FAILED)
+      expect(snapshot(sb)).toEqual(before)
+    })
+
+    test('--clear cuja conta escolhida pela regra não tem token: recusa (exit 3) e o override fica', async () => {
+      const sb = world()
+      const cfg = await loadConfig(sb.paths)
+      manualSwap(ctxAt(sb), cfg, 'bk', 'admin1')
+      expect(readRuntime(sb.paths).overrides.bk).toBeDefined()
+      rmTokenOf(sb, 'gabriel') // a regra volta à preferida, que perdeu o token
+      const before = snapshot(sb)
+      const err = await catching(() => manualSwap(ctxAt(sb), cfg, 'bk', undefined, { clear: true }))
+      expect(err.exit).toBe(EXIT.USAGE)
+      expect(snapshot(sb)).toEqual(before)
+      expect(currentAccount(sb.paths, 'bk')).toBe('admin1')
+    })
+  })
+
   test('grava o override até o reset da preferida (ms) e troca', async () => {
     const sb = world()
     addAll(sb)
@@ -511,6 +633,58 @@ describe('manualSwap', () => {
   })
 })
 
+describe('renderSwap', () => {
+  const base: SwapReport = {
+    mux: 'bk',
+    noop: false,
+    from: 'gabriel',
+    to: 'admin1',
+    stopped: [],
+    waitingBusy: [IDS.c],
+    keptScheduled: [],
+    failed: [],
+    callerWaiting: false,
+    override: null,
+  }
+  const text = (r: Partial<SwapReport>): string => renderSwap({ ...base, ...r }, { nowMs: NOW, timeZone: 'UTC' })
+
+  test('sem sessão que chamou na espera: não fala dela', () => {
+    const t = text({})
+    expect(t).toContain(`aguardando o fim do turno: ${IDS.c}`)
+    expect(t).not.toContain('que chamou')
+  })
+
+  test('com a sessão que chamou na espera: diz que ela NÃO é parada por este comando', () => {
+    const t = text({ waitingBusy: [IDS.a, IDS.c], callerWaiting: true })
+    expect(t).toContain('que chamou')
+    expect(t).toContain('NÃO será parada')
+    expect(t).toContain('watch')
+  })
+
+  test('override com reset conhecido: "reset da preferida"; sem reset (agora + 5 h): diz que é uma estimativa', () => {
+    const known = text({ override: { account: 'admin1', until: NOW + 3_600_000, resetKnown: true } })
+    expect(known).toContain('reset da preferida')
+    expect(known).not.toContain('5 h')
+    const guess = text({ override: { account: 'admin1', until: NOW + 5 * 3_600_000, resetKnown: false } })
+    expect(guess).toContain('~5 h: a preferida não tem reset conhecido')
+    expect(guess).not.toContain('reset da preferida')
+  })
+
+  test('runSwap: só marca callerWaiting quando o chamador (CLAUDE_JOB_DIR) está mesmo na espera', async () => {
+    const sb = world()
+    addAll(sb)
+    const withCaller = await runSwap(ctxAt(sb, { env: { ...sb.env, CLAUDE_JOB_DIR: join(sb.paths.jobsDir, IDS.a) } }), { mux: 'bk', account: 'admin1' })
+    expect(withCaller.report.callerWaiting).toBe(true)
+    expect(withCaller.text).toContain('NÃO será parada')
+    const sb2 = world()
+    addAll(sb2)
+    const without = await runSwap(ctxAt(sb2), { mux: 'bk', account: 'admin1' })
+    expect(without.report.callerWaiting).toBe(false)
+    expect(without.text).not.toContain('que chamou')
+    expect(without.report.override).toEqual({ account: 'admin1', until: RESET_5H_S * 1000, resetKnown: true })
+  })
+})
+
 describe('sb swap (comando)', () => {
   test('--json: sem token, com o desfecho e o override; sessão que chamou espera', () => {
     const sb = world()
@@ -528,7 +702,8 @@ describe('sb swap (comando)', () => {
     expect(r.stdout + r.stderr).not.toMatch(/sk-ant-/)
     const j = JSON.parse(r.stdout) as Record<string, unknown>
     expect(j).toMatchObject({ mux: 'bk', noop: false, from: 'gabriel', to: 'admin1', stopped: [IDS.b], waitingBusy: [IDS.a, IDS.c], keptScheduled: [IDS.d], failed: [] })
-    expect(j.override).toEqual({ account: 'admin1', until: realReset * 1000 })
+    expect(j.override).toEqual({ account: 'admin1', until: realReset * 1000, resetKnown: true })
+    expect(j.callerWaiting).toBe(true)
     expect(stops(sb)).toEqual([IDS.b])
     for (const f of [runtimeFile(sb.paths), logFile(sb.paths, 'watch')]) expect(readFileSync(f, 'utf8')).not.toMatch(/sk-ant-/)
   })

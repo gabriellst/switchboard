@@ -85,13 +85,16 @@ export function isLimitBlocked(s: Session): boolean {
 /**
  * Precedência: sem pid → `stopped` (o estado do job é obsoleto); a sessão que chamou → `busy` (nunca parar quem
  * chamou); VIVA sem job legível (`job == null`: state.json ausente, malformado ou de formato novo) → `busy` (pode ter
- * cron/monitor/wake que não conseguimos ver: nunca parar o que não dá para ler); trabalho agendado → `scheduled`;
+ * cron/monitor/wake que não conseguimos ver: nunca parar o que não dá para ler); VIVA com job legível mas SEM `inFlight`
+ * → `busy` (mesma razão: falha fechada); trabalho agendado → `scheduled`;
  * limite → `limit-blocked`; `status busy`/`tasks`/`queued` → `busy`; senão `free`.
  */
 export function activityOf(s: Session, callerJobId?: string): Activity {
   if (!s.live) return 'stopped'
   if (callerJobId !== undefined && s.agent.id === callerJobId) return 'busy'
   if (s.job === null) return 'busy'
+  // state.json legível mas sem a chave `inFlight` (2 de 51 jobs reais): não dá para confirmar que não há turno nem agendamento
+  if (s.job.inFlight == null) return 'busy'
   if (hasScheduledWork(s.job, s.agent)) return 'scheduled'
   if (isLimitBlocked(s)) return 'limit-blocked'
   const f = s.job?.inFlight

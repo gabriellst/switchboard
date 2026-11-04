@@ -210,8 +210,8 @@ describe('activityOf (precedência)', () => {
     expect(activityOf(session({}, jobWith()), 'a1b2c3d4')).toBe('busy')
     expect(activityOf(session({}, cron), 'a1b2c3d4')).toBe('busy')
     expect(activityOf(session({}, limit), 'a1b2c3d4')).toBe('busy')
-    expect(activityOf(session({}, jobWith()), 'ffffffff')).toBe('free') // outro id: sem efeito
-    expect(activityOf(session({}, jobWith()), undefined)).toBe('free')
+    expect(activityOf(session({}, jobWith({ inFlight: inFlight() })), 'ffffffff')).toBe('free') // outro id: sem efeito
+    expect(activityOf(session({}, jobWith({ inFlight: inFlight() })), undefined)).toBe('free')
   })
 
   test('kinds só com local_bash/local_agent → busy, NÃO scheduled (muda a regra conservadora antiga)', () => {
@@ -243,12 +243,26 @@ describe('activityOf (precedência)', () => {
     expect(activityOf(session(noPid, null))).toBe('stopped')
   })
 
-  test('parser tolerante: job.state qualquer, sem inFlight/needs/wake/fan', () => {
+  test('parser tolerante: job.state qualquer, sem needs/wake/fan (com inFlight presente)', () => {
     for (const state of [undefined, 'running', 'stopped', 'done', 'working', 'blocked', 'algo-novo-do-claude']) {
-      expect(activityOf(session({}, jobWith({ state })))).toBe('free')
+      expect(activityOf(session({}, jobWith({ state, inFlight: inFlight() })))).toBe('free')
     }
-    expect(activityOf(session({}, jobWith({ state: 'blocked', needs: 'rate limited' })))).toBe('free') // sem inFlight: não decide limite
     expect(activityOf(session({}, jobWith({ inFlight: inFlight({ fan: [] }) })))).toBe('free')
+  })
+
+  test('viva com state.json legível mas SEM inFlight → busy (falha fechada: não dá para confirmar que não há turno nem agendamento)', () => {
+    for (const state of [undefined, 'done', 'blocked', 'running']) {
+      expect(activityOf(session({}, jobWith({ state })))).toBe('busy')
+    }
+    expect(activityOf(session({}, jobWith({ state: 'blocked', needs: 'rate limited' })))).toBe('busy') // não vira limit-blocked sem inFlight
+    expect(activityOf(session({ status: 'idle' }, jobWith()))).toBe('busy')
+    expect(activityOf(session({ status: undefined }, jobWith()))).toBe('busy')
+    expect(activityOf(session({}, jobWith()), 'a1b2c3d4')).toBe('busy') // quem chamou
+  })
+
+  test('sem inFlight: parada continua stopped (o pid manda); com inFlight vazio continua free', () => {
+    expect(activityOf(session(noPid, jobWith()))).toBe('stopped')
+    expect(activityOf(session({}, jobWith({ inFlight: inFlight() })))).toBe('free')
   })
 })
 

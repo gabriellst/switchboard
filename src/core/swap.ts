@@ -133,7 +133,7 @@ export function applySwap(ctx: Ctx, cfg: Config, p: { mux: string; to: string; r
     if (!(e instanceof SbError)) throw e
     const msg = `mux ${p.mux}: o link já aponta para ${p.to}, mas não consegui tratar as sessões antigas: ${e.message}`
     note(ctx, msg)
-    throw new SbError(msg, e.exit, '  as sessões antigas continuam como estavam; nenhuma foi parada por esta troca')
+    throw new SbError(msg, e.exit, '  as sessões antigas continuam como estavam; nenhuma foi parada por esta troca; o watch tenta de novo as sessões restantes')
   }
   const outcome: SwapOutcome = { ...rest, from, to: p.to }
 
@@ -278,6 +278,7 @@ export function manualSwap(
     if (account !== undefined) throw usageError('--clear não aceita conta: ele volta à conta que a regra escolhe', `  use \`sb swap ${mux} --clear\` ou \`sb swap ${mux} ${account}\``)
     const cur = needCurrent()
     const ev = desiredAccount({ name: mux, mux: m, current: cur, usage, swap: cfg.swap, nowMs: now })
+    assertSwapTarget(ctx, cfg, mux, ev.desired) // tudo o que o applySwap pode recusar, ANTES de apagar o override
     const runtime = readRuntime(ctx.paths)
     if (runtime.overrides[mux] !== undefined) {
       delete runtime.overrides[mux]
@@ -300,7 +301,10 @@ export function manualSwap(
     }
     target = ev.desired
   }
+  // Tudo o que o `applySwap` pode recusar roda ANTES de qualquer gravação: uma troca recusada não deixa override
+  // para trás (o watch o honraria depois de um `doctor --fix` e pararia sessões que ninguém confirmou).
   assertSwapTarget(ctx, cfg, mux, target)
+  needCurrent()
 
   const runtime = readRuntime(ctx.paths)
   if (target === m.account || pool.length === 0) {
