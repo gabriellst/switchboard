@@ -225,7 +225,7 @@ type Settled =
   | { result: 'rewritten' | 'stopped-and-rewritten' }
   | { result: 'unchanged' }
   | { result: 'gone' }
-  | { result: 'queued'; why: 'busy' | 'raced' | 'stop-failed'; detail?: string }
+  | { result: 'queued'; why: 'busy' | 'raced' | 'stop-failed' | 'unreadable'; detail?: string }
 
 const stamp = (ctx: Ctx): string => `pin-${new Date(ctx.now()).toISOString().replace(/[:.]/g, '-')}`
 
@@ -242,12 +242,16 @@ function freshBackup(ctx: Ctx, id: string): string {
  * O passo comum de `pinSession` e `applyPending` para UMA sessão: reconfere tudo com dados frescos, decide e (só se a
  * sessão está sem `pid`) reescreve. Lança `SbError` para recusas, destino ruim e falha de gravação; devolve `queued`
  * quando a sessão está ocupada, ganhou `pid` no meio-tempo ou o `claude stop` falhou. `expectLink`: o `settings` de um
- * item da fila (tem que coincidir com o destino recalculado; senão o item não vale mais → exit 3).
+ * item da fila (tem que coincidir com o destino recalculado; senão o item não vale mais → exit 3). Com `expectLink`
+ * (caminho da fila), uma sessão cujo `state.json` não pôde ser lido (`job === null`: ausente ou meio gravado num tick)
+ * NÃO é recusada como estranha: não dá para saber de quem ela é, então volta `queued`/`unreadable` e o item espera.
+ * No comando direto (`expectLink` ausente) continua exit 3.
  */
 function settle(ctx: Ctx, cfg: Config, id: string, account: string | null, expectLink: string | undefined, opts: RestartOptions, first?: Session): Settled {
   const caller = callerJobId(ctx.env)
   const s = first ?? loadSessions(ctx).find((x) => x.agent.id === id)
   if (s === undefined) return { result: 'gone' }
+  if (s.job === null && expectLink !== undefined) return { result: 'queued', why: 'unreadable' }
   const r = resolveTarget(ctx, cfg, s, account)
   if (r.kind === 'unchanged') return { result: 'unchanged' }
   const t = r.target
@@ -318,7 +322,9 @@ function settle(ctx: Ctx, cfg: Config, id: string, account: string | null, expec
  * parar a sessão (bloqueante). Parada → reescreve já; livre/limit-blocked e não é a que chamou → para e reescreve;
  * ocupada, agendada, a que chamou, ou que ganhou `pid` no meio-tempo → `runtime.pending` (o `watch` aplica).
  * `claude stop` que falha → exit 1 (nada reescrito) e o pedido FICA na fila. Já estar no destino → exit 3 (e o pedido
- * antigo, se havia, é cancelado). O `runtime.json` é lido ANTES de qualquer efeito (corrompido → exit 1 sem tocar em nada).
+ * antigo, se havia, é cancelado); o mesmo vale para toda recusa exit 3 sobre a sessão achada (conta fora de `accounts`,
+ * sessão estranha, mux fora da config, sessão sumida): o pedido mais recente vence. Exit 1 (falha transitória) não cancela.
+ * O `runtime.json` é lido ANTES de qualquer efeito (corrompido → exit 1 sem tocar em nada).
  */
 export function pinSession(ctx: Ctx, cfg: Config, prefix: string, account: string | null, opts: RestartOptions = {}): PinOutcome {
   if (account !== null) assertSafeName(account)
@@ -326,12 +332,22 @@ export function pinSession(ctx: Ctx, cfg: Config, prefix: string, account: strin
   const runtime = readRuntime(ctx.paths)
   const s = pick(ctx, loadSessions(ctx), prefix)
   const id = s.agent.id
-  const r = resolveTarget(ctx, cfg, s, account)
-  const settled = settle(ctx, cfg, id, account, undefined, opts, s)
+  let r: Resolved
+  let settled: Settled
+  try {
+    r = resolveTarget(ctx, cfg, s, account)
+    settled = settle(ctx, cfg, id, account, undefined, opts, s)
+  } catch (e) {
+    // Regra das recusas: o pedido mais recente vence. Uma recusa por regra (exit 3) sobre uma sessão que EXISTE cancela o
+    // pedido antigo dela, como `unchanged`; falha transitória (exit 1: token quebrado, claude fora do ar) não cancela.
+    if (e instanceof SbError && e.exit === EXIT.USAGE && dropPending(runtime, id)) writeRuntime(ctx.paths, runtime)
+    throw e
+  }
   const link = r.kind === 'target' ? r.target.link : ''
 
   switch (settled.result) {
     case 'gone':
+      if (dropPending(runtime, id)) writeRuntime(ctx.paths, runtime)
       throw usageError(`a sessão ${id} sumiu da lista do claude`)
     case 'unchanged':
       if (dropPending(runtime, id)) writeRuntime(ctx.paths, runtime) // o pedido antigo não vale mais
@@ -365,6 +381,8 @@ function noteOnce(ctx: Ctx, runtime: Runtime, key: string, line: string): void {
  * Bloqueante (`claude stop`). Por item, a mesma lógica de `pinSession` com dados frescos:
  *   - sessão sumida, ou que deixou de ser nossa / cujo pedido não vale mais (conta fora de `accounts`, `settings`
  *     adulterado) → `gone` e sai da fila, com uma linha SEM conteúdo no log;
+ *   - `state.json` da sessão ilegível agora (ausente ou meio gravado: `job === null`) → continua na fila, NUNCA descartado
+ *     (não dá para saber de quem é; o aviso vai ao log uma vez). Só `legacy`/`foreign`/`none` COM state legível são estranhas;
  *   - ocupada/a que chamou/ganhou `pid`/`claude stop` falhou/destino quebrou → continua na fila (`queued`; os avisos
  *     de falha vão ao log UMA vez por motivo). O `watch` não deve notificar `queued`: é "ainda esperando";
  *   - livre → para e reescreve (`stopped-and-rewritten`); parada → reescreve (`rewritten`); notifica.
@@ -398,6 +416,7 @@ export function applyPending(ctx: Ctx, cfg: Config, opts: RestartOptions = {}): 
         const account = item.reason === 'pin' && owner.kind === 'pin' ? owner.account : null
         if (item.reason === 'pin' ? owner.kind !== 'pin' : owner.kind !== 'mux') throw usageError(`pedido pendente da sessão ${jobId} com destino inválido`)
         const r = settle(ctx, cfg, jobId, account, item.settings, opts)
+        if (!(r.result === 'queued' && r.why === 'unreadable')) delete runtime.notified[`pin:${jobId}:unreadable`] // lido de novo: um próximo apagão volta a avisar
         switch (r.result) {
           case 'gone':
             removed.add(item)
@@ -410,7 +429,8 @@ export function applyPending(ctx: Ctx, cfg: Config, opts: RestartOptions = {}): 
             break
           case 'queued':
             out.push({ jobId, settings: item.settings, result: 'queued' })
-            if (r.why !== 'busy') noteOnce(ctx, runtime, `pin:${jobId}:${r.why}`, `pin: sessão ${jobId} continua na fila (${r.why === 'raced' ? 'ganhou pid antes da gravação' : (r.detail ?? 'falha ao parar')})`)
+            if (r.why === 'unreadable') noteOnce(ctx, runtime, `pin:${jobId}:unreadable`, `pin: sessão ${jobId} continua na fila (state.json ilegível agora; tento de novo no próximo ciclo)`)
+            else if (r.why !== 'busy') noteOnce(ctx, runtime, `pin:${jobId}:${r.why}`, `pin: sessão ${jobId} continua na fila (${r.why === 'raced' ? 'ganhou pid antes da gravação' : (r.detail ?? 'falha ao parar')})`)
             break
           default:
             removed.add(item)

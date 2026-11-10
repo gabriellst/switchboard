@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runPin } from '../src/commands/pin.js'
 import { runUnpin } from '../src/commands/unpin.js'
@@ -231,6 +231,42 @@ describe('pinSession — sessão viva', () => {
     expect(pending(sb)).toEqual([])
   })
 
+  test('regra das recusas: um exit 3 sobre a sessão achada cancela o pedido antigo dela (o mais recente vence); exit 1 não', async () => {
+    const sb = world()
+    addSession(sb, ID, flagsOf(muxLink(sb.paths, 'bk')), 'busy')
+    addSession(sb, ID2, flagsOf(muxLink(sb.paths, 'bk')), 'busy')
+    const cfg = cfgSync(sb)
+    pinSession(ctxAt(sb), cfg, ID, 'admin1')
+    pinSession(ctxAt(sb), cfg, ID2, 'admin1')
+    expect(pending(sb).map((i) => i.jobId)).toEqual([ID, ID2])
+
+    // conta fora de `accounts` do mux: recusa (exit 3) e o pedido antigo da MESMA sessão sai da fila; o da outra fica
+    const stateBefore = stateText(sb)
+    catching(() => pinSession(ctxAt(sb), cfg, ID, 'solo'), EXIT.USAGE)
+    expect(pending(sb).map((i) => i.jobId)).toEqual([ID2])
+    expect(stateText(sb)).toBe(stateBefore)
+    expect(stops(sb)).toEqual([])
+
+    // recusa por exit 1 (token do destino quebrado) é transitória: o pedido antigo continua
+    writeFileSync(tokenFile(sb.paths, 'admin1'), '{ quebrado')
+    catching(() => pinSession(ctxAt(sb), cfg, ID2, 'admin1'), EXIT.CHECK_FAILED)
+    expect(pending(sb).map((i) => i.jobId)).toEqual([ID2])
+
+    // prefixo que não acha sessão nenhuma não mexe na fila
+    catching(() => pinSession(ctxAt(sb), cfg, 'dead', 'admin1'), EXIT.USAGE)
+    expect(pending(sb).map((i) => i.jobId)).toEqual([ID2])
+  })
+
+  test('sessão que deixou de ser nossa (exit 3 no resolveTarget) também cancela o pedido antigo', async () => {
+    const sb = world()
+    addSession(sb, ID, flagsOf(muxLink(sb.paths, 'bk')), 'busy')
+    const cfg = cfgSync(sb)
+    pinSession(ctxAt(sb), cfg, ID, 'admin1')
+    addSession(sb, ID, ['--settings', '/tmp/outro.json'], 'busy') // virou de terceiros
+    catching(() => pinSession(ctxAt(sb), cfg, ID, 'admin1'), EXIT.USAGE)
+    expect(pending(sb)).toEqual([])
+  })
+
   test('o `claude stop` falha → exit 1, nada reescrito, pedido fica na fila', async () => {
     const sb = world()
     addSession(sb, ID, flagsOf(muxLink(sb.paths, 'bk')), 'free')
@@ -288,6 +324,31 @@ describe('pinSession — guarda contra pid entre a decisão e a escrita', () => 
     const o = pinSession(ctx, cfgSync(sb), ID, 'admin1')
     expect(o.result).toBe('queued')
     expect(backups(sb)).toEqual([])
+  })
+})
+
+describe('pinSession — conta keychain', () => {
+  test('fixar no keychain num mux que o permite (berzerk): --settings de tokens/keychain.json, nenhum token gravado ou impresso', async () => {
+    const sb = world()
+    addSession(sb, ID, flagsOf(muxLink(sb.paths, 'berzerk')), 'stopped')
+    const o = pinSession(ctxAt(sb), cfgSync(sb), ID, 'keychain')
+    expect(o).toEqual({ jobId: ID, settings: pinLink(sb.paths, 'keychain'), result: 'rewritten' })
+    expect(flagsNow(sb).slice(-2)).toEqual(['--settings', pinLink(sb.paths, 'keychain')])
+    expect(readlinkSync(pinLink(sb.paths, 'keychain'))).toBe(tokenFile(sb.paths, 'keychain'))
+    expect(readFileSync(tokenFile(sb.paths, 'keychain'), 'utf8').trim()).toBe('{}')
+    const files = [...filesUnder(sb.paths.jobsDir), ...backups(sb), runtimeFile(sb.paths), logFile(sb.paths, 'watch')]
+    for (const f of files.filter(existsSync)) {
+      expect(readFileSync(f, 'utf8')).not.toMatch(/sk-ant-/)
+      expect(readFileSync(f, 'utf8')).not.toContain(FAKE_TOKEN)
+    }
+    // pelo CLI: nada de token na saída
+    const sb2 = world()
+    addSession(sb2, ID, flagsOf(muxLink(sb2.paths, 'berzerk')), 'stopped')
+    const r = sb2.runSb(['pin', ID, 'keychain', '--json'])
+    expect(r.code).toBe(0)
+    expect(r.stdout + r.stderr).not.toMatch(/sk-ant-/)
+    expect(r.stdout).not.toContain(FAKE_TOKEN)
+    expect(JSON.parse(r.stdout).settings).toBe(pinLink(sb2.paths, 'keychain'))
   })
 })
 
@@ -556,6 +617,71 @@ describe('applyPending', () => {
     expect(stateText(sb)).toBe(before)
     expect(pending(sb).length).toBe(1)
     expect(watchLog(sb).split('\n').filter((l) => l.includes(ID)).length).toBe(1)
+  })
+
+  test.each<['ausente' | 'pela metade', (sb: Sandbox) => void]>([
+    ['ausente', (sb) => rmSync(stateFile(sb))],
+    ['pela metade', (sb) => writeFileSync(stateFile(sb), '{ "respawnFlags": [')],
+  ])('state.json %s num tick (sessão viva): o item fica na fila, nada é gravado nem parado; legível no tick seguinte → aplica', async (_n, damage) => {
+    const sb = world()
+    const bk = flagsOf(muxLink(sb.paths, 'bk'))
+    addSession(sb, ID, bk, 'busy')
+    const cfg = await cfgOf(sb)
+    expect(pinSession(ctxAt(sb), cfg, ID, 'admin1').result).toBe('queued')
+    const queuedBefore = pending(sb)
+
+    damage(sb)
+    const stateAfterDamage = existsSync(stateFile(sb)) ? stateText(sb) : null
+    for (let tick = 0; tick < 2; tick++) {
+      expect(applyPending(ctxAt(sb), cfg)).toEqual([{ jobId: ID, settings: pinLink(sb.paths, 'admin1'), result: 'queued' }])
+    }
+    expect(pending(sb)).toEqual(queuedBefore) // nunca descartado
+    expect(stops(sb)).toEqual([])
+    expect(backups(sb)).toEqual([])
+    expect(existsSync(stateFile(sb)) ? stateText(sb) : null).toEqual(stateAfterDamage)
+    expect(readFileSync(runtimeFile(sb.paths), 'utf8').includes('"pin:')).toBe(true) // o aviso fica registrado uma vez
+    expect(watchLog(sb).split('\n').filter((l) => l.includes('continua na fila')).length).toBe(1)
+    expect(watchLog(sb)).not.toMatch(/sk-ant-/)
+
+    // o state.json voltou (agora com a sessão livre): o pedido é aplicado
+    addSession(sb, ID, bk, 'free')
+    expect(applyPending(ctxAt(sb), cfg)).toEqual([{ jobId: ID, settings: pinLink(sb.paths, 'admin1'), result: 'stopped-and-rewritten' }])
+    expect(stops(sb)).toEqual([['stop', ID]])
+    expect(flagsNow(sb).slice(-2)).toEqual(['--settings', pinLink(sb.paths, 'admin1')])
+    expect(pending(sb)).toEqual([])
+  })
+
+  test('state.json ilegível numa sessão PARADA também espera; depois aplica sem `claude stop`', async () => {
+    const sb = world()
+    const bk = flagsOf(muxLink(sb.paths, 'bk'))
+    addSession(sb, ID, bk, 'busy')
+    const cfg = await cfgOf(sb)
+    pinSession(ctxAt(sb), cfg, ID, 'admin1')
+    addSession(sb, ID, bk, 'stopped')
+    rmSync(stateFile(sb))
+    expect(applyPending(ctxAt(sb), cfg).map((o) => o.result)).toEqual(['queued'])
+    expect(pending(sb).length).toBe(1)
+    addSession(sb, ID, bk, 'stopped')
+    expect(applyPending(ctxAt(sb), cfg).map((o) => o.result)).toEqual(['rewritten'])
+    expect(stops(sb)).toEqual([])
+  })
+
+  test('estranha COM state.json legível continua sendo descartada (legado, terceiros, sem --settings); `pinSession` direto segue exit 3 numa viva ilegível', async () => {
+    const sb = world()
+    const cfg = await cfgOf(sb)
+    const ids = ['a1b2c3d4', 'a1b2c3d5', 'a1b2c3d6']
+    addSession(sb, ids[0]!, ['--settings', join(sb.paths.claudeDir, 'contas', 'x.json')], 'busy')
+    addSession(sb, ids[1]!, ['--settings', '/tmp/outro.json'], 'busy')
+    addSession(sb, ids[2]!, ['--allowed-tools', 'Read'], 'busy')
+    queue(sb, ids.map((jobId) => ({ jobId, settings: pinLink(sb.paths, 'admin1'), reason: 'pin' as const })))
+    expect(applyPending(ctxAt(sb), cfg).map((o) => o.result)).toEqual(['gone', 'gone', 'gone'])
+    expect(pending(sb)).toEqual([])
+
+    // o comando direto não muda: viva com state.json ilegível → exit 3
+    addSession(sb, ID, flagsOf(muxLink(sb.paths, 'bk')), 'busy')
+    rmSync(stateFile(sb))
+    catching(() => pinSession(ctxAt(sb), cfg, ID, 'admin1'), EXIT.USAGE)
+    expect(pending(sb)).toEqual([])
   })
 
   test('sem fila: nada é lido além do runtime (nenhuma chamada ao claude)', async () => {
