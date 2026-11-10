@@ -267,6 +267,28 @@ describe('pinSession — sessão viva', () => {
     expect(pending(sb)).toEqual([])
   })
 
+  test('recusa de uma sessão VIVA com state.json ilegível (leitura transitória) NÃO cancela o pedido da fila; já legível, a recusa cancela', async () => {
+    const sb = world()
+    addSession(sb, ID, flagsOf(muxLink(sb.paths, 'bk')), 'busy')
+    const cfg = cfgSync(sb)
+    pinSession(ctxAt(sb), cfg, ID, 'admin1')
+    expect(pending(sb).map((i) => i.jobId)).toEqual([ID])
+
+    // o state.json fica meio gravado: viva e ilegível vira `owner none` (exit 3), mas isso é uma falha de leitura, não uma recusa de verdade
+    writeFileSync(stateFile(sb), '{ meio gravad')
+    const before = stateText(sb)
+    const e = catching(() => pinSession(ctxAt(sb), cfg, ID, 'admin1'), EXIT.USAGE)
+    expect(e.message).toContain('não é gerenciada')
+    expect(pending(sb).map((i) => i.jobId)).toEqual([ID])
+    expect(stateText(sb)).toBe(before)
+    expect(stops(sb)).toEqual([])
+
+    // legível de novo e a sessão deixou de ser nossa: recusa de verdade, o pedido sai
+    addSession(sb, ID, ['--settings', '/tmp/outro.json'], 'busy')
+    catching(() => pinSession(ctxAt(sb), cfg, ID, 'admin1'), EXIT.USAGE)
+    expect(pending(sb)).toEqual([])
+  })
+
   test('o `claude stop` falha → exit 1, nada reescrito, pedido fica na fila', async () => {
     const sb = world()
     addSession(sb, ID, flagsOf(muxLink(sb.paths, 'bk')), 'free')

@@ -340,7 +340,9 @@ export function pinSession(ctx: Ctx, cfg: Config, prefix: string, account: strin
   } catch (e) {
     // Regra das recusas: o pedido mais recente vence. Uma recusa por regra (exit 3) sobre uma sessão que EXISTE cancela o
     // pedido antigo dela, como `unchanged`; falha transitória (exit 1: token quebrado, claude fora do ar) não cancela.
-    if (e instanceof SbError && e.exit === EXIT.USAGE && dropPending(runtime, id)) writeRuntime(ctx.paths, runtime)
+    // Sessão VIVA com `state.json` ilegível (`job === null`) também é transitória: o dono vira `none` só porque não deu para ler.
+    const unreadable = s.live && s.job === null
+    if (e instanceof SbError && e.exit === EXIT.USAGE && !unreadable && dropPending(runtime, id)) writeRuntime(ctx.paths, runtime)
     throw e
   }
   const link = r.kind === 'target' ? r.target.link : ''
