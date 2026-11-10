@@ -288,6 +288,7 @@ cópia. Ideia para a v2: `sb swap --reopen` via `respawn`, julgando o sucesso po
 | `pins/<conta>.json` | link → `tokens/<conta>.json` |
 | `usage.json` | última medição por conta (sem token): utilizações, resets, status, `measuredAt`, grupo de duplicata |
 | `runtime.json` | conta atual de cada mux, último swap (quando, de→para, motivo) |
+| `watch.json` | batimento do `sb watch`: `{ pid, lastTick }` (apagado ao sair limpo); `sb pin`/`sb unpin` avisam se o watch não está rodando |
 | `log/` | `watch.log`, `login.log` |
 
 ## 6. Medição de uso

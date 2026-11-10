@@ -86,7 +86,8 @@ const POLL_MS = 50
 
 type LockState = { kind: 'live'; pid: number } | { kind: 'forming' } | { kind: 'stale' } | { kind: 'gone' } | { kind: 'unknown' }
 
-function isAlive(pid: number): boolean {
+/** O processo existe (sinal 0). `EPERM` conta: existe, só não é nosso. */
+export function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return true

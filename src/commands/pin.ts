@@ -4,8 +4,9 @@ import { defaultCtx, type Ctx } from '../core/ctx.js'
 import { EXIT, SbError } from '../core/errors.js'
 import { withLock } from '../core/fsx.js'
 import { assertSafeName } from '../core/paths.js'
-import { pinSession, type PinOutcome } from '../core/pin.js'
+import { pinSession, STOP_FAILED_QUEUED_DETAIL, type PinOutcome } from '../core/pin.js'
 import type { RestartOptions } from '../core/swap.js'
+import { watchStatus, type WatchStatus } from '../core/watch.js'
 import { guarded } from './guard.js'
 
 export interface PinArgs {
@@ -20,8 +21,20 @@ export interface PinRun {
   text: string
 }
 
-/** Texto em português do que aconteceu; só ids, nomes de conta e caminhos (nunca token). */
-function describe(o: PinOutcome, account: string | null): string {
+/** A linha sobre o `watch`, que é quem aplica a fila: confirma quando ele roda, avisa (⚠) quando não. */
+function watchLine(w: WatchStatus): string {
+  switch (w.state) {
+    case 'running':
+      return 'o `sb watch` está rodando e aplica o pedido quando a sessão ficar livre\n'
+    case 'stale':
+      return '⚠ o `sb watch` parece parado (o processo morreu ou o último ciclo foi há mais de 90 s): o pedido só será aplicado quando ele voltar; rode `sb watch`\n'
+    case 'absent':
+      return '⚠ o `sb watch` não está rodando: o pedido só será aplicado quando você iniciá-lo (`sb watch`)\n'
+  }
+}
+
+/** Texto em português do que aconteceu; só ids, nomes de conta e caminhos (nunca token). `w`: o estado do watch (só importa na fila). */
+function describe(o: PinOutcome, account: string | null, w: WatchStatus): string {
   const what = account === null ? `solta (volta para o mux ${muxName(o.settings)})` : `fixada na conta ${account}`
   switch (o.result) {
     case 'rewritten':
@@ -29,7 +42,7 @@ function describe(o: PinOutcome, account: string | null): string {
     case 'stopped-and-rewritten':
       return `sessão ${o.jobId} parada e ${what}\nreabra a sessão para ela usar a nova conta\n`
     case 'queued':
-      return `sessão ${o.jobId} está ocupada (ou foi ela quem chamou o sb): o pedido ficou na fila (runtime.pending)\no \`sb watch\` aplica quando ela ficar livre; se ele não estiver rodando, o pedido espera\n`
+      return `sessão ${o.jobId} está ocupada (ou foi ela quem chamou o sb): o pedido ficou na fila (runtime.pending)\n${watchLine(w)}`
   }
 }
 
@@ -47,18 +60,30 @@ export async function runPinCommand(ctx: Ctx, args: PinArgs, opts: { waitMs?: nu
   const account = args.account ?? null
   if (account !== null) assertSafeName(account)
   const { waitMs, ...restart } = opts
-  const outcome = await withLock(
-    ctx.paths,
-    async () => {
-      const cfg = await loadConfig(ctx.paths)
-      return pinSession(ctx, cfg, args.session, account, restart)
-    },
-    waitMs === undefined ? {} : { waitMs },
-  )
+  let outcome: PinOutcome
+  try {
+    outcome = await withLock(
+      ctx.paths,
+      async () => {
+        const cfg = await loadConfig(ctx.paths)
+        return pinSession(ctx, cfg, args.session, account, restart)
+      },
+      waitMs === undefined ? {} : { waitMs },
+    )
+  } catch (e) {
+    // `claude stop` falhou: o pedido também ficou na fila, e sem watch ele não anda
+    if (e instanceof SbError && e.exit === EXIT.CHECK_FAILED && e.detail === STOP_FAILED_QUEUED_DETAIL) {
+      const w = watchStatus(ctx)
+      if (w.state !== 'running') throw new SbError(e.message, e.exit, `${e.detail}\n  ${watchLine(w).trimEnd()}`)
+    }
+    throw e
+  }
+  // só a fila depende do watch: confere o batimento depois do lock (o `pin` não toca em `watch.json`)
+  const watch = outcome.result === 'queued' ? watchStatus(ctx) : undefined
   const text =
     args.json === true
-      ? `${JSON.stringify({ jobId: outcome.jobId, account, settings: outcome.settings, result: outcome.result }, null, 2)}\n`
-      : describe(outcome, account)
+      ? `${JSON.stringify({ jobId: outcome.jobId, account, settings: outcome.settings, result: outcome.result, ...(watch !== undefined && { watch: watch.state }) }, null, 2)}\n`
+      : describe(outcome, account, watch ?? { state: 'absent' })
   return { outcome, text }
 }
 

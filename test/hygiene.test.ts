@@ -18,6 +18,7 @@ const CASES: Array<[string[], number]> = [
   [['swap', 'bk', 'admin1', '--json'], 0],
   [['pin', 'aaaaaaaa', 'admin1', '--json'], 3], // sessão inexistente: recusa limpa, nada gravado
   [['unpin', 'aaaaaaaa'], 3],
+  [['watch', '--once', '--json'], 0], // mede (API falsa em loopback recusa), avalia e não troca nada
   [['accounts', 'rm', 'admin1'], 3], // sem --yes: recusa
   [['login', 'x', '--terminal'], 3], // entrada vazia: cancela, nada gravado
   [['attach', 'nova', 'bk'], 1], // conta inexistente: login desanexado com o claude falso (sem token impresso) → falha, sem vazar

@@ -36,6 +36,9 @@ export type PinOutcome = { jobId: string; settings: string; result: 'rewritten' 
 /** `gone`: o item saiu da fila SEM ser aplicado (a sessão sumiu, deixou de ser nossa ou o pedido não vale mais). */
 export type PendingOutcome = PinOutcome | { jobId: string; result: 'gone' }
 
+/** O `detail` do exit 1 de `claude stop` que falhou: o pedido FICOU na fila (o comando acrescenta o aviso do watch). */
+export const STOP_FAILED_QUEUED_DETAIL = '  o pedido ficou na fila: o watch tenta de novo'
+
 const usageError = (message: string, detail?: string): SbError => new SbError(message, EXIT.USAGE, detail)
 const checkError = (message: string, detail?: string): SbError => new SbError(message, EXIT.CHECK_FAILED, detail)
 
@@ -270,6 +273,11 @@ function settle(ctx: Ctx, cfg: Config, id: string, account: string | null, expec
     if (f === undefined) return { result: 'gone' }
     const again = activityOf(f, caller)
     if (again === 'free' || again === 'limit-blocked') {
+      // o `watch` reparte um teto de paradas por ciclo entre trocas, reinícios e esta fila: sem saldo, o pedido espera o próximo
+      if (opts.throttle !== undefined) {
+        if (opts.throttle.stops <= 0) return { result: 'queued', why: 'busy' }
+        opts.throttle.stops--
+      }
       // `stopSession` devolve false numa sessão já parada: o `pid` é conferido ANTES (ver `activityOf`: 'free' ⇒ vivo)
       const ok = stopSession(ctx, id, opts.stopTimeoutMs, opts.stop)
       const after = listAgents(ctx).find((a) => a.id === id)
@@ -359,7 +367,7 @@ export function pinSession(ctx: Ctx, cfg: Config, prefix: string, account: strin
       enqueue(ctx, runtime, id, r.target)
       note(ctx, `${account === null ? 'unpin' : `pin ${account}`}: sessão ${id} na fila (${settled.why})`)
       if (settled.why === 'stop-failed') {
-        throw checkError(`não consegui parar a sessão ${id}: ${settled.detail ?? 'falha ao parar'}; nada foi reescrito`, '  o pedido ficou na fila: o watch tenta de novo')
+        throw checkError(`não consegui parar a sessão ${id}: ${settled.detail ?? 'falha ao parar'}; nada foi reescrito`, STOP_FAILED_QUEUED_DETAIL)
       }
       return { jobId: id, settings: link, result: 'queued' }
     }

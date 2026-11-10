@@ -1,5 +1,6 @@
 import type { AccountInfo, MuxMembership, PanelData } from './core/panel.js'
 import type { Measurement } from './core/usage.js'
+import type { TickReport } from './core/watch.js'
 
 export interface RenderOpts {
   nowMs: number
@@ -227,5 +228,24 @@ export function renderSwap(r: SwapReport, opts: RenderOpts): string {
     for (const f of r.failed) lines.push(`não consegui parar ${f.id}: ${f.error}`)
     if (r.stopped.length + r.waitingBusy.length + r.keptScheduled.length + r.failed.length === 0) lines.push('nenhuma sessão antiga para reiniciar')
   }
+  return `${lines.join('\n')}\n`
+}
+
+/** `sb watch --once`: o que o ciclo mediu, avaliou e fez. */
+export function renderTick(r: TickReport): string {
+  if (r.skipped === 'locked') return 'outro sb está com o lock do estado: nada foi feito neste ciclo\n'
+  const lines = [r.measured ? 'uso medido agora' : 'uso: medição recente reaproveitada (nenhuma chamada à API)']
+  for (const e of r.evaluations) lines.push(e.desired === e.current ? `mux ${e.mux}: fica em ${e.current}` : `mux ${e.mux}: ${e.current} → ${e.desired} (conta desejada)`)
+  for (const s of r.swaps) {
+    lines.push(`troca no mux ${s.mux}: ${s.from} → ${s.to}`)
+    if (s.stopped.length > 0) lines.push(`  paradas (reabra para usar ${s.to}): ${s.stopped.join(', ')}`)
+  }
+  for (const [mux, x] of Object.entries(r.restarts)) {
+    if (r.swaps.some((s) => s.mux === mux)) continue
+    if (x.stopped.length > 0) lines.push(`mux ${mux}: sessões antigas paradas: ${x.stopped.join(', ')}`)
+  }
+  for (const p of r.pending) lines.push(p.result === 'queued' ? `fila: sessão ${p.jobId} ainda espera` : `fila: sessão ${p.jobId} ${p.result === 'gone' ? 'descartada' : p.result}`)
+  if (r.kept.length > 0) lines.push(`mantidas (state.json sem inFlight; nunca reiniciadas): ${r.kept.join(', ')}`)
+  for (const n of r.notices) lines.push(`• ${n}`)
   return `${lines.join('\n')}\n`
 }

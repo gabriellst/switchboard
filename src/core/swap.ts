@@ -35,6 +35,8 @@ export interface SwapOutcome {
   /** têm trabalho agendado: nunca paradas */
   keptScheduled: string[]
   failed: Array<{ id: string; error: string }>
+  /** só com `RestartOptions.throttle` (o `watch`) e só quando não vazia: adiadas para o próximo ciclo (teto de paradas ou recuo por falha anterior) */
+  deferred?: string[]
 }
 
 export type Noop = { noop: true }
@@ -43,6 +45,13 @@ export type Noop = { noop: true }
 export interface RestartOptions {
   stopTimeoutMs?: number
   stop?: StopOptions
+  /**
+   * Só o `watch` passa (quem faz polling): `stops` é o que ainda cabe de `claude stop` neste ciclo (`stopSession` BLOQUEIA
+   * até 45 s). Cada tentativa gasta uma unidade, nesta e nas demais chamadas que compartilham o objeto; sem saldo a sessão
+   * fica adiada. A presença do objeto liga também o recuo: uma parada que falha grava `runtime.notified['stopfail:<id>:<since>']`
+   * e não se tenta de novo no mesmo `since` (o `sb swap` manual não passa isto e sempre tenta).
+   */
+  throttle?: { stops: number }
 }
 
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1000
@@ -159,7 +168,8 @@ export function applySwap(ctx: Ctx, cfg: Config, p: { mux: string; to: string; r
  *     vez (`runtime.notified['sched:<id>:<from>']`, texto sem token).
  * "Parada" exige `stopSession === true` E a entrada sem `pid` numa nova leitura de `claude agents`; sessão que já estava
  * sem `pid` não gera `claude stop` (que falharia). Erro de uma sessão (`SbError`) vai para `failed` e as demais seguem.
- * Pins, estranhas, legado e outros muxes: intocados.
+ * Pins, estranhas, legado e outros muxes: intocados. Com `opts.throttle` (só o `watch`): no máximo `throttle.stops` paradas,
+ * as demais e as que já falharam neste `since` vão para `deferred`; uma parada que falha grava `stopfail:<id>:<since>` e avisa UMA vez.
  *
  * EXIGE O LOCK JÁ TOMADO (grava `runtime.json`). Bloqueante (ver o topo do arquivo).
  */
@@ -206,9 +216,26 @@ export function restartStale(ctx: Ctx, cfg: Config, mux: string, opts: RestartOp
     throw e
   }
 
+  const { throttle } = opts
+  const stopfailKey = (id: string): string => `stopfail:${id}:${since}`
+  const defer = (id: string): void => {
+    ;(out.deferred ??= []).push(id)
+  }
+  // recuo (só no `watch`): marca a falha para não bloquear o ciclo de novo no mesmo `since`, e avisa UMA vez
+  const backOff = (id: string): void => {
+    if (throttle === undefined) return
+    runtime.notified[stopfailKey(id)] = ctx.now()
+    tell(ctx, 'switchboard', `Não consegui parar a sessão ${id} (mux ${mux}); não tento de novo nesta troca.`)
+    note(ctx, `sessão ${id} (mux ${mux}) não parou; recuo até a próxima troca`)
+  }
+
   try {
     for (const id of candidates) {
       try {
+        if (throttle !== undefined && runtime.notified[stopfailKey(id)] !== undefined) {
+          defer(id)
+          continue
+        }
         // dados frescos: o que era livre na listagem pode ter começado um turno (ou sido reaberto) enquanto paramos as anteriores
         const fresh = loadSessionsDeduped(ctx, runtime).find((s) => s.agent.id === id)
         if (fresh === undefined || !isStale(fresh)) continue // já parou sozinha ou foi reaberta (startedAt novo): não é nossa
@@ -223,13 +250,22 @@ export function restartStale(ctx: Ctx, cfg: Config, mux: string, opts: RestartOp
         }
         if (act !== 'free' && act !== 'limit-blocked') continue
         if (fresh.agent.pid == null) continue // sem pid: nada a parar (e `claude stop` falharia)
+        if (throttle !== undefined) {
+          if (throttle.stops <= 0) {
+            defer(id)
+            continue
+          }
+          throttle.stops--
+        }
         if (!stopSession(ctx, id, opts.stopTimeoutMs, opts.stop)) {
           out.failed.push({ id, error: '`claude stop` falhou ou a sessão não parou no prazo' })
+          backOff(id)
           continue
         }
         const after = listAgents(ctx).find((a) => a.id === id)
         if (after !== undefined && after.pid != null) {
           out.failed.push({ id, error: 'o `claude stop` terminou, mas a sessão continua viva' })
+          backOff(id)
           continue
         }
         out.stopped.push(id)

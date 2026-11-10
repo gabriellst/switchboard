@@ -50,6 +50,8 @@ export const pinLink = (p: Paths, account: string): string => join(p.stateDir, '
 export const usageFile = (p: Paths): string => join(p.stateDir, 'usage.json')
 export const runtimeFile = (p: Paths): string => join(p.stateDir, 'runtime.json')
 export const lockFile = (p: Paths): string => join(p.stateDir, 'lock')
+/** batimento do `sb watch` (`{ pid, lastTick }`): quem enfileira um pedido confere se o laço está vivo. */
+export const watchFile = (p: Paths): string => join(p.stateDir, 'watch.json')
 export const logFile = (p: Paths, which: 'watch' | 'login'): string => join(p.stateDir, 'log', `${which}.log`)
 export const backupDir = (p: Paths, stamp: string): string => join(p.stateDir, 'backup', stamp)
 /** pid do login em andamento (PTY): impede dois `setup-token` ao mesmo tempo. */

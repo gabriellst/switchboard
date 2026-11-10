@@ -23,6 +23,7 @@ const main = defineCommand({
     swap: () => import('./commands/swap.js').then((m) => m.default),
     pin: () => import('./commands/pin.js').then((m) => m.default),
     unpin: () => import('./commands/unpin.js').then((m) => m.default),
+    watch: () => import('./commands/watch.js').then((m) => m.default),
   },
 })
 
