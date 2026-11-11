@@ -6,6 +6,7 @@ import { loadConfig } from '../src/core/config.js'
 import { EXIT, SbError } from '../src/core/errors.js'
 import { currentAccount } from '../src/core/links.js'
 import { muxLink, tokenFile } from '../src/core/paths.js'
+import { renderMuxList } from '../src/report.js'
 import { FAKE_TOKEN, sandbox, type Sandbox } from './helpers.js'
 
 /** Sandbox com a config dada (texto) e tokens para as contas pedidas. */
@@ -363,5 +364,19 @@ describe('CLI sb mux', () => {
     expect(set.stdout).toContain('sb swap')
     expect(sb.runSb(['mux', 'rm', 'bk']).code).toBe(EXIT.USAGE) // é o default
     expect(sb.runSb(['mux', 'add', '../x', '--root', '~/x', '--account', 'gabriel']).code).toBe(EXIT.USAGE)
+  })
+})
+
+describe('renderMuxList', () => {
+  test('as colunas alinham mesmo na linha da célula mais larga', () => {
+    const out = renderMuxList([
+      { name: 'app', root: '/um/caminho/bem/comprido', default: true, current: 'pessoal', preferred: 'pessoal', accounts: ['pessoal', 'trabalho'], pool: ['pessoal', 'trabalho'] },
+      { name: 'cli', root: '~/cli', default: false, current: 'trabalho', preferred: 'trabalho', accounts: ['trabalho'], pool: [] },
+    ])
+    const [head, ...rows] = out.split('\n\n')[0]!.split('\n')
+    const col = head!.indexOf('atual')
+    for (const r of rows) expect(r.slice(col - 2, col)).toBe('  ') // a coluna "atual" começa no mesmo ponto em todas as linhas
+    expect(rows[0]!.indexOf('pessoal')).toBe(col)
+    expect(rows[1]!.indexOf('trabalho')).toBe(col)
   })
 })

@@ -195,7 +195,7 @@ export function renderMuxList(rows: MuxRow[]): string {
     r.accounts.filter((a) => !r.pool.includes(a)).join(', ') || '—',
   ])
   const widths = head.map((h, i) => Math.max(h.length, ...body.map((b) => b[i]!.length)))
-  const line = (cols: string[]): string => cols.map((c, i) => (i === cols.length - 1 ? c : cell(c, widths[i]!))).join('  ')
+  const line = (cols: string[]): string => cols.map((c, i) => (i === cols.length - 1 ? c : c.padEnd(widths[i]!))).join('  ')
   return `${[line(head), ...body.map(line)].join('\n')}\n\n* = default (pastas fora de todo root)\n`
 }
 
