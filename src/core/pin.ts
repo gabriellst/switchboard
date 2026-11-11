@@ -27,6 +27,8 @@ import { ensureState, KEYCHAIN, tokenStatus } from './tokens.js'
 //   - nada aqui é concorrente: tudo roda com o lock do estado tomado pelo CHAMADOR (`withLock`; o `watch` já o segura
 //     no tick) e `stopSession` BLOQUEIA o laço de eventos (`Atomics.wait`, até 45 s): é um passo bloqueante, não o
 //     intercale com trabalho que precise responder rápido a sinais.
+// `adopt` (pedido do `sb doctor --fix`: sessão em segundo plano SEM `--settings`) segue as MESMAS regras, com o destino
+// fixo em `mux/<mux da PASTA da sessão>.json`; legado e terceiros nunca são adotados.
 // O backup (`backup/pin-<stamp>/<id>.state.json`) é cópia do `state.json` inteiro: se a sessão tem um `--settings`
 // inline de terceiros com token, o token vai junto (arquivo 600 em diretório 700, como o resto do estado).
 // ---------------------------------------------------------------------------------------------------------------
@@ -140,8 +142,16 @@ type Resolved = { kind: 'target'; target: Target } | { kind: 'unchanged' }
  * Decide o destino SEM gravar nada. Recusas (exit 3): sessão que não é nossa (só `--settings` de mux/pin), conta fora de
  * `accounts` do mux, `unpin` de quem não está fixa. `unchanged`: a sessão já está no destino (fixa nessa conta, ou solta num `unpin`).
  */
-function resolveTarget(ctx: Ctx, cfg: Config, s: Session, account: string | null): Resolved {
+function resolveTarget(ctx: Ctx, cfg: Config, s: Session, account: string | null, adopt = false): Resolved {
   const id = s.agent.id
+  if (adopt) {
+    // adoção: só quem NÃO tem `--settings` (e cujo state.json foi lido: `none` também é o que sobra de um arquivo ilegível)
+    if (s.owner.kind === 'mux' || s.owner.kind === 'pin') return { kind: 'unchanged' }
+    if (s.owner.kind !== 'none') throw usageError(`a sessão ${id} ${s.owner.kind === 'legacy' ? 'é do claude-conta (legado)' : 'tem --settings de terceiros'}: o sb não a adota`)
+    if (s.job === null) throw checkError(`a sessão ${id} não tem state.json legível: não dá para adotá-la`, '  rode `sb doctor`')
+    const mux = resolveMuxForDir(cfg, s.agent.cwd, ctx.paths.home)
+    return { kind: 'target', target: { account: null, mux, link: muxLink(ctx.paths, mux) } }
+  }
   if (s.owner.kind !== 'mux' && s.owner.kind !== 'pin') {
     const why = s.job === null ? 'sem state.json legível' : s.owner.kind === 'none' ? 'sem --settings' : s.owner.kind === 'legacy' ? 'do claude-conta (legado)' : 'com --settings de terceiros'
     throw usageError(`a sessão ${id} não é gerenciada pelo sb (${why}): o sb não mexe nela`, '  `sb doctor` mostra o que dá para adotar')
@@ -175,7 +185,7 @@ const PIN_PROBLEM: Record<TargetProblem, string> = {
 function prepareTarget(ctx: Ctx, t: Target): void {
   if (t.account === null) {
     const c = checkSettingsTarget(t.link)
-    if (!c.ok) throw checkError(`mux "${t.mux}": o link do mux não serve para soltar a sessão (${PIN_PROBLEM[c.problem] ?? c.problem}; ${t.link})`, '  rode `sb doctor --fix`')
+    if (!c.ok) throw checkError(`mux "${t.mux}": o link do mux não serve para a sessão (${PIN_PROBLEM[c.problem] ?? c.problem}; ${t.link})`, '  rode `sb doctor --fix`')
     return
   }
   const account = t.account
@@ -248,14 +258,14 @@ function freshBackup(ctx: Ctx, id: string): string {
  * item da fila (tem que coincidir com o destino recalculado; senão o item não vale mais → exit 3). Com `expectLink`
  * (caminho da fila), uma sessão cujo `state.json` não pôde ser lido (`job === null`: ausente ou meio gravado num tick)
  * NÃO é recusada como estranha: não dá para saber de quem ela é, então volta `queued`/`unreadable` e o item espera.
- * No comando direto (`expectLink` ausente) continua exit 3.
+ * No comando direto (`expectLink` ausente) continua exit 3. `adopt`: ver `resolveTarget`.
  */
-function settle(ctx: Ctx, cfg: Config, id: string, account: string | null, expectLink: string | undefined, opts: RestartOptions, first?: Session): Settled {
+function settle(ctx: Ctx, cfg: Config, id: string, account: string | null, expectLink: string | undefined, opts: RestartOptions, first?: Session, adopt = false): Settled {
   const caller = callerJobId(ctx.env)
   const s = first ?? loadSessions(ctx).find((x) => x.agent.id === id)
   if (s === undefined) return { result: 'gone' }
   if (s.job === null && expectLink !== undefined) return { result: 'queued', why: 'unreadable' }
-  const r = resolveTarget(ctx, cfg, s, account)
+  const r = resolveTarget(ctx, cfg, s, account, adopt)
   if (r.kind === 'unchanged') return { result: 'unchanged' }
   const t = r.target
   if (expectLink !== undefined && t.link !== expectLink) throw usageError(`o pedido da sessão ${id} não vale mais (o destino mudou)`)
@@ -386,7 +396,7 @@ function noteOnce(ctx: Ctx, runtime: Runtime, key: string, line: string): void {
 }
 
 /**
- * Aplica a fila `runtime.pending` (itens `pin`/`unpin`; `adopt`/`migrate` ficam intocados) — usado pelo `watch`.
+ * Aplica a fila `runtime.pending` (itens `pin`/`unpin`/`adopt`; `migrate` fica intocado) — usado pelo `watch`.
  * EXIGE O LOCK JÁ TOMADO (o `watch` já o segura no tick; `pin`/`unpin` usam `withLock`): lê e grava `runtime.json`.
  * Bloqueante (`claude stop`). Por item, a mesma lógica de `pinSession` com dados frescos:
  *   - sessão sumida, ou que deixou de ser nossa / cujo pedido não vale mais (conta fora de `accounts`, `settings`
@@ -401,7 +411,7 @@ function noteOnce(ctx: Ctx, runtime: Runtime, key: string, line: string): void {
  */
 export function applyPending(ctx: Ctx, cfg: Config, opts: RestartOptions = {}): PendingOutcome[] {
   const runtime = readRuntime(ctx.paths)
-  const items = runtime.pending.filter(isQueued)
+  const items = runtime.pending.filter((i) => isQueued(i) || i.reason === 'adopt')
   if (items.length === 0) return []
   const before = JSON.stringify(runtime)
   const removed = new Set<Runtime['pending'][number]>()
@@ -422,7 +432,7 @@ export function applyPending(ctx: Ctx, cfg: Config, opts: RestartOptions = {}): 
         assertSessionId(jobId)
         if (typeof item.settings !== 'string') throw usageError(`pedido pendente da sessão ${jobId} sem destino`)
         const owner = ownershipOf(['--settings', item.settings], ctx.paths)
-        // o destino do pedido tem que ser um dos NOSSOS links; o `unpin` vale para qualquer mux, o `pin` para uma conta
+        // o destino do pedido tem que ser um dos NOSSOS links; o `unpin` e o `adopt` valem para um mux, o `pin` para uma conta
         const account = item.reason === 'pin' && owner.kind === 'pin' ? owner.account : null
         if (item.reason === 'pin' ? owner.kind !== 'pin' : owner.kind !== 'mux') throw usageError(`pedido pendente da sessão ${jobId} com destino inválido`)
         // recuo (só no `watch`): uma parada que falhou não é repetida para o MESMO pedido (`requestedAt`); um pedido novo tenta de novo
@@ -431,7 +441,7 @@ export function applyPending(ctx: Ctx, cfg: Config, opts: RestartOptions = {}): 
           out.push({ jobId, settings: item.settings, result: 'queued' })
           continue
         }
-        const r = settle(ctx, cfg, jobId, account, item.settings, opts)
+        const r = settle(ctx, cfg, jobId, account, item.settings, opts, undefined, item.reason === 'adopt')
         if (!(r.result === 'queued' && r.why === 'unreadable')) delete runtime.notified[`pin:${jobId}:unreadable`] // lido de novo: um próximo apagão volta a avisar
         switch (r.result) {
           case 'gone':
@@ -460,7 +470,7 @@ export function applyPending(ctx: Ctx, cfg: Config, opts: RestartOptions = {}): 
             delete runtime.notified[stopfail]
             out.push({ jobId, settings: item.settings, result: r.result })
             note(ctx, `pin: sessão ${jobId} ${r.result} (${item.reason})`)
-            tell(ctx, `Sessão ${jobId}: ${item.reason === 'pin' ? `fixada em ${account}` : 'solta do pin'}${r.result === 'stopped-and-rewritten' ? '; reabra-a para valer' : ''}.`)
+            tell(ctx, `Sessão ${jobId}: ${item.reason === 'pin' ? `fixada em ${account}` : item.reason === 'adopt' ? `adotada pelo mux ${owner.kind === 'mux' ? owner.mux : '?'}` : 'solta do pin'}${r.result === 'stopped-and-rewritten' ? '; reabra-a para valer' : ''}.`)
         }
       } catch (e) {
         if (!(e instanceof SbError)) throw e
@@ -481,6 +491,50 @@ export function applyPending(ctx: Ctx, cfg: Config, opts: RestartOptions = {}): 
     if (JSON.stringify(runtime) !== before) writeRuntime(ctx.paths, runtime)
   }
   return out
+}
+
+// ------------------------------------------------------------------------------------------------------------- adoção
+
+export type AdoptResult = 'rewritten' | 'queued' | 'unchanged' | 'gone'
+
+/** Põe (ou mantém) o pedido de adoção da sessão em `runtime.pending`; o mesmo pedido de novo não regrava nada. */
+function enqueueAdopt(ctx: Ctx, jobId: string, link: string): void {
+  const runtime = readRuntime(ctx.paths)
+  const same = runtime.pending.filter((i) => i.reason === 'adopt' && i.jobId === jobId)
+  if (same.length === 1 && same[0]!.settings === link) return
+  runtime.pending = runtime.pending.filter((i) => !(i.reason === 'adopt' && i.jobId === jobId))
+  runtime.pending.push({ jobId, settings: link, reason: 'adopt', requestedAt: ctx.now() })
+  writeRuntime(ctx.paths, runtime)
+}
+
+/**
+ * Adoção de UMA sessão em segundo plano sem `--settings` (`sb doctor --fix`): acrescenta `--settings mux/<mux da pasta>.json`
+ * aos `respawnFlags`. EXIGE O LOCK JÁ TOMADO. NUNCA para uma sessão: o mesmo passo de `pinSession`/`applyPending`
+ * roda com saldo ZERO de paradas, então só uma sessão PARADA é reescrita (`rewritten`: backup, modo preservado, `pid`
+ * reconferido antes de gravar); uma que está viva, ocupada ou que ganhou `pid` no meio-tempo vai para `runtime.pending`
+ * (`queued`, `reason: 'adopt'`, sem duplicar) e o `watch` a aplica quando ela ficar livre (`applyPending`). `unchanged`: já
+ * tem `--settings` nosso; `gone`: a sessão sumiu. Legado e terceiros: `SbError` exit 3 (o doctor nem chega aqui); link do
+ * mux inválido ou `state.json` ilegível: `SbError` exit 1, antes de gravar ou enfileirar qualquer coisa.
+ */
+export function adoptSession(ctx: Ctx, cfg: Config, id: string): AdoptResult {
+  assertSessionId(id)
+  const s = loadSessions(ctx).find((x) => x.agent.id === id)
+  if (s === undefined) return 'gone'
+  const r = resolveTarget(ctx, cfg, s, null, true)
+  if (r.kind === 'unchanged') return 'unchanged'
+  const settled = settle(ctx, cfg, id, null, undefined, { throttle: { stops: 0 } }, s, true)
+  switch (settled.result) {
+    case 'gone':
+    case 'unchanged':
+      return settled.result
+    case 'queued':
+      enqueueAdopt(ctx, id, r.target.link)
+      note(ctx, `adopt: sessão ${id} na fila (${settled.why})`)
+      return 'queued'
+    default:
+      note(ctx, `adopt: sessão ${id} reescrita (estava parada)`)
+      return 'rewritten'
+  }
 }
 
 // ------------------------------------------------------------------------------------------------------------ painel

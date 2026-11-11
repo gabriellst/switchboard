@@ -7,7 +7,8 @@ import { tokenFile, type Paths } from './paths.js'
 /** Nome reservado: usa o keychain do `claude`; nunca é medido nem guarda token. */
 export const KEYCHAIN = 'keychain'
 
-const SUBDIRS = ['tokens', 'mux', 'pins', 'log', 'backup'] as const
+/** Subdiretórios do diretório de estado (todos em 700). */
+export const SUBDIRS = ['tokens', 'mux', 'pins', 'log', 'backup'] as const
 
 /** Raiz e subdiretórios em 700 (corrige modo de quem já existe); `tokens/keychain.json` é sempre `{}` em 600. */
 export function ensureState(paths: Paths): void {

@@ -601,15 +601,12 @@ describe('applyPending', () => {
     expect(watchLog(sb)).not.toMatch(/sk-ant-/)
   })
 
-  test('itens de outros motivos (adopt/migrate) ficam intocados na fila', async () => {
+  test('itens de outros motivos (migrate) ficam intocados na fila', async () => {
     const sb = world()
     const cfg = await cfgOf(sb)
-    queue(sb, [
-      { jobId: 'deadbeef', settings: '/x', reason: 'adopt' },
-      { jobId: 'deadbeef', settings: '/y', reason: 'migrate' },
-    ])
+    queue(sb, [{ jobId: 'deadbeef', settings: '/y', reason: 'migrate' }])
     expect(applyPending(ctxAt(sb), cfg)).toEqual([])
-    expect(pending(sb).map((i) => i.reason)).toEqual(['adopt', 'migrate'])
+    expect(pending(sb).map((i) => i.reason)).toEqual(['migrate'])
   })
 
   test('item adulterado (settings fora dos nossos links, conta fora de accounts) → sai da fila sem tocar na sessão', async () => {
@@ -710,6 +707,141 @@ describe('applyPending', () => {
     const sb = world()
     expect(applyPending(ctxAt(sb), await cfgOf(sb))).toEqual([])
     expect(sb.calls()).toEqual([])
+  })
+})
+
+describe('applyPending — adopt (sessão sem --settings, pedida pelo `sb doctor --fix`)', () => {
+  const queue = (sb: Sandbox, items: Array<{ jobId: string; settings: string; reason: 'pin' | 'unpin' | 'adopt' | 'migrate' }>): void => {
+    const r = readRuntime(sb.paths)
+    r.pending = items.map((i) => ({ ...i, requestedAt: NOW }))
+    writeRuntime(sb.paths, r)
+  }
+  const bk = (sb: Sandbox): string => muxLink(sb.paths, 'bk')
+  const plain = ['--allowed-tools', 'Read', '--allowed-tools', 'Bash']
+
+  test('livre → para e reescreve com o link do mux da pasta; ocupada espera; rodar de novo não faz nada', async () => {
+    const sb = world()
+    const cfg = await cfgOf(sb)
+    addSession(sb, ID, plain, 'busy')
+    queue(sb, [{ jobId: ID, settings: bk(sb), reason: 'adopt' }])
+    const before = stateText(sb)
+
+    expect(applyPending(ctxAt(sb), cfg)).toEqual([{ jobId: ID, settings: bk(sb), result: 'queued' }])
+    expect(stateText(sb)).toBe(before)
+    expect(stops(sb)).toEqual([])
+    expect(pending(sb).length).toBe(1)
+
+    addSession(sb, ID, plain, 'free')
+    expect(applyPending(ctxAt(sb), cfg)).toEqual([{ jobId: ID, settings: bk(sb), result: 'stopped-and-rewritten' }])
+    expect(stops(sb)).toEqual([['stop', ID]])
+    expect(flagsNow(sb)).toEqual([...plain, '--settings', bk(sb)])
+    expect(backups(sb).length).toBe(1)
+    expect(pending(sb)).toEqual([])
+
+    const snap = snapshot(sb)
+    expect(applyPending(ctxAt(sb), cfg)).toEqual([])
+    expect(snapshot(sb)).toEqual(snap)
+  })
+
+  test('parada → reescreve sem `claude stop`; o destino é o mux da PASTA da sessão', async () => {
+    const sb = world()
+    const cfg = await cfgOf(sb)
+    const cwd = join(sb.env.HOME!, 'pessoal', 'proj')
+    addSession(sb, ID, plain, 'stopped', { cwd })
+    queue(sb, [{ jobId: ID, settings: muxLink(sb.paths, 'pessoal'), reason: 'adopt' }])
+    expect(applyPending(ctxAt(sb), cfg).map((o) => o.result)).toEqual(['rewritten'])
+    expect(stops(sb)).toEqual([])
+    expect(flagsNow(sb)).toEqual([...plain, '--settings', muxLink(sb.paths, 'pessoal')])
+  })
+
+  test('pedido cujo destino não é o mux da pasta (a sessão ou a config mudou) → gone, nada reescrito', async () => {
+    const sb = world()
+    const cfg = await cfgOf(sb)
+    addSession(sb, ID, plain, 'stopped', { cwd: join(sb.env.HOME!, 'pessoal', 'proj') })
+    queue(sb, [{ jobId: ID, settings: bk(sb), reason: 'adopt' }])
+    const before = stateText(sb)
+    expect(applyPending(ctxAt(sb), cfg).map((o) => o.result)).toEqual(['gone'])
+    expect(stateText(sb)).toBe(before)
+    expect(pending(sb)).toEqual([])
+  })
+
+  test('pedido com destino que não é link de mux (pin, caminho de terceiros) → gone', async () => {
+    const sb = world()
+    const cfg = await cfgOf(sb)
+    addSession(sb, ID, plain, 'stopped')
+    addSession(sb, ID2, plain, 'stopped')
+    queue(sb, [
+      { jobId: ID, settings: pinLink(sb.paths, 'admin1'), reason: 'adopt' },
+      { jobId: ID2, settings: '/tmp/evil.json', reason: 'adopt' },
+    ])
+    const before = [stateText(sb, ID), stateText(sb, ID2)]
+    expect(applyPending(ctxAt(sb), cfg).map((o) => o.result)).toEqual(['gone', 'gone'])
+    expect([stateText(sb, ID), stateText(sb, ID2)]).toEqual(before)
+    expect(pending(sb)).toEqual([])
+  })
+
+  test('sessão que já é gerenciada (alguém fixou ou adotou à mão) sai da fila sem reescrever; sumida → gone', async () => {
+    const sb = world()
+    const cfg = await cfgOf(sb)
+    addSession(sb, ID, flagsOf(bk(sb)), 'free')
+    addSession(sb, ID2, flagsOf(pinLink(sb.paths, 'admin1')), 'free')
+    queue(sb, [
+      { jobId: ID, settings: bk(sb), reason: 'adopt' },
+      { jobId: ID2, settings: bk(sb), reason: 'adopt' },
+      { jobId: 'deadbeef', settings: bk(sb), reason: 'adopt' },
+    ])
+    const before = [stateText(sb, ID), stateText(sb, ID2)]
+    expect(applyPending(ctxAt(sb), cfg)).toEqual([{ jobId: 'deadbeef', result: 'gone' }])
+    expect([stateText(sb, ID), stateText(sb, ID2)]).toEqual(before)
+    expect(stops(sb)).toEqual([])
+    expect(pending(sb)).toEqual([])
+  })
+
+  test('legado e terceiros nunca são adotados (gone, intocadas)', async () => {
+    const sb = world()
+    const cfg = await cfgOf(sb)
+    addSession(sb, ID, ['--settings', join(sb.paths.claudeDir, 'contas', 'ativa.json')], 'stopped')
+    addSession(sb, ID2, ['--settings', '/tmp/outro.json'], 'free')
+    queue(sb, [
+      { jobId: ID, settings: bk(sb), reason: 'adopt' },
+      { jobId: ID2, settings: bk(sb), reason: 'adopt' },
+    ])
+    const before = [stateText(sb, ID), stateText(sb, ID2)]
+    expect(applyPending(ctxAt(sb), cfg).map((o) => o.result)).toEqual(['gone', 'gone'])
+    expect([stateText(sb, ID), stateText(sb, ID2)]).toEqual(before)
+    expect(stops(sb)).toEqual([])
+  })
+
+  test('state.json ilegível: o item espera (nunca descartado nem adivinhado); a que chamou nunca é parada; link do mux quebrado: espera', async () => {
+    const sb = world()
+    const cfg = await cfgOf(sb)
+    addSession(sb, ID, plain, 'free')
+    queue(sb, [{ jobId: ID, settings: bk(sb), reason: 'adopt' }])
+    const good = stateText(sb)
+
+    writeFileSync(stateFile(sb), '{ "respawnFlags": [')
+    expect(applyPending(ctxAt(sb), cfg).map((o) => o.result)).toEqual(['queued'])
+    expect(pending(sb).length).toBe(1)
+    expect(stops(sb)).toEqual([])
+
+    writeFileSync(stateFile(sb), good)
+    expect(applyPending(asCaller(sb, ID), cfg).map((o) => o.result)).toEqual(['queued']) // a sessão que chamou
+    expect(stops(sb)).toEqual([])
+
+    writeFileSync(tokenFile(sb.paths, 'gabriel'), '{ quebrado') // o mux bk aponta para gabriel
+    expect(applyPending(ctxAt(sb), cfg).map((o) => o.result)).toEqual(['queued'])
+    expect(stateText(sb)).toBe(good)
+    expect(stops(sb)).toEqual([])
+    expect(pending(sb).length).toBe(1)
+  })
+
+  test('um `sb pin` recusado sobre a sessão não cancela o pedido de adoção', async () => {
+    const sb = world()
+    const cfg = await cfgOf(sb)
+    addSession(sb, ID, plain, 'busy')
+    queue(sb, [{ jobId: ID, settings: bk(sb), reason: 'adopt' }])
+    catching(() => pinSession(ctxAt(sb), cfg, ID, 'admin1'), EXIT.USAGE) // sem --settings: o sb não pina o que não gerencia
+    expect(pending(sb).map((i) => i.reason)).toEqual(['adopt'])
   })
 })
 

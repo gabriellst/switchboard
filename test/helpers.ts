@@ -68,6 +68,7 @@ export function removeSandboxes(): void {
 
 const CLI = join(import.meta.dir, '..', 'src', 'cli.ts')
 const FAKE_CLAUDE = join(import.meta.dir, 'fake-claude.ts')
+const FAKE_PS = join(import.meta.dir, 'fake-ps.ts')
 
 /**
  * Ambiente isolado: HOME, config, estado e jobs num tmpdir; `claude` falso; API falsa;
@@ -86,6 +87,8 @@ export function sandbox(): Sandbox {
     SWITCHBOARD_STATE_DIR: join(dir, 'state'),
     SWITCHBOARD_JOBS_DIR: join(dir, 'jobs'),
     SWITCHBOARD_CLAUDE: FAKE_CLAUDE,
+    // `ps` falso: o `sb doctor` lê a tabela de processos para achar `claude agents` sem --settings; a real mudaria o resultado
+    SWITCHBOARD_PS: FAKE_PS,
     // Servidor falso: a Task da sonda sobe um HTTP local e sobrescreve esta porta.
     // Até lá, porta 9 (discard) em loopback: nunca chega a api.anthropic.com.
     SWITCHBOARD_API_BASE: 'http://127.0.0.1:9',

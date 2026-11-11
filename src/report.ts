@@ -1,3 +1,5 @@
+import type { FixAction } from './core/doctor.js'
+import { ADOPT_QUEUED_NOTE, FIXABLE, type Finding } from './core/findings.js'
 import type { InstallResult } from './core/install.js'
 import type { AccountInfo, MuxMembership, PanelData } from './core/panel.js'
 import type { Measurement } from './core/usage.js'
@@ -279,5 +281,34 @@ export function renderInstall(r: InstallResult, home: string): string {
   if (r.launchd.status === 'loaded') lines.push(`launchd: watch carregado em ${r.launchd.domain}`)
   else if (r.launchd.status === 'failed') lines.push(`launchd: não consegui carregar o watch em ${r.launchd.domain}: ${r.launchd.error ?? 'erro desconhecido'}`)
   else lines.push('launchd: o watch seria (re)carregado')
+  return `${lines.join('\n')}\n`
+}
+
+const FINDING_ICON = { error: '✗', warn: '⚠' } as const
+
+/**
+ * `sb doctor`: uma linha por achado (erros primeiro), os consertos tentados (só com `--fix`) e a contagem. Sem achados,
+ * "tudo em ordem". Sem `--fix` e com algo que ele conserta, termina com a dica.
+ */
+export function renderFindings(findings: Finding[], fixes?: FixAction[]): string {
+  const lines: string[] = []
+  if (fixes !== undefined && fixes.length > 0) {
+    lines.push('consertos:')
+    const codeW = Math.max(...fixes.map((f) => f.code.length))
+    const subjW = Math.max(...fixes.map((f) => f.subject.length))
+    for (const f of fixes) lines.push(`  ${f.ok ? '✓' : '✗'} ${f.code.padEnd(codeW)}  ${f.subject.padEnd(subjW)}  ${f.message}`)
+    lines.push('')
+  }
+  if (findings.length === 0) {
+    lines.push('✓ tudo em ordem')
+    return `${lines.join('\n')}\n`
+  }
+  const sorted = [...findings].sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'error' ? -1 : 1))
+  const codeW = Math.max(...sorted.map((f) => f.code.length))
+  const subjW = Math.max(...sorted.map((f) => f.subject.length))
+  for (const f of sorted) lines.push(`${FINDING_ICON[f.severity]} ${f.code.padEnd(codeW)}  ${f.subject.padEnd(subjW)}  ${f.message}`)
+  const errors = findings.filter((f) => f.severity === 'error').length
+  lines.push('', `${errors} erro(s) · ${findings.length - errors} aviso(s)`)
+  if (fixes === undefined && findings.some((f) => FIXABLE.has(f.code) && !f.message.includes(ADOPT_QUEUED_NOTE))) lines.push('`sb doctor --fix` conserta o que dá (links, permissões, sessões sem settings)')
   return `${lines.join('\n')}\n`
 }
