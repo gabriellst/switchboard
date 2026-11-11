@@ -425,26 +425,39 @@ export function applyPending(ctx: Ctx, cfg: Config, opts: RestartOptions = {}): 
         // o destino do pedido tem que ser um dos NOSSOS links; o `unpin` vale para qualquer mux, o `pin` para uma conta
         const account = item.reason === 'pin' && owner.kind === 'pin' ? owner.account : null
         if (item.reason === 'pin' ? owner.kind !== 'pin' : owner.kind !== 'mux') throw usageError(`pedido pendente da sessão ${jobId} com destino inválido`)
+        // recuo (só no `watch`): uma parada que falhou não é repetida para o MESMO pedido (`requestedAt`); um pedido novo tenta de novo
+        const stopfail = `pin:${jobId}:stopfail:${item.requestedAt}`
+        if (opts.throttle !== undefined && runtime.notified[stopfail] !== undefined) {
+          out.push({ jobId, settings: item.settings, result: 'queued' })
+          continue
+        }
         const r = settle(ctx, cfg, jobId, account, item.settings, opts)
         if (!(r.result === 'queued' && r.why === 'unreadable')) delete runtime.notified[`pin:${jobId}:unreadable`] // lido de novo: um próximo apagão volta a avisar
         switch (r.result) {
           case 'gone':
             removed.add(item)
+            delete runtime.notified[stopfail]
             out.push({ jobId, result: 'gone' })
             note(ctx, `pin: sessão ${jobId} sumiu; o pedido saiu da fila`)
             break
           case 'unchanged':
             removed.add(item)
+            delete runtime.notified[stopfail]
             note(ctx, `pin: sessão ${jobId} já está no destino pedido; o pedido saiu da fila`)
             break
           case 'queued':
             out.push({ jobId, settings: item.settings, result: 'queued' })
             if (r.why === 'unreadable') noteOnce(ctx, runtime, `pin:${jobId}:unreadable`, `pin: sessão ${jobId} continua na fila (state.json ilegível agora; tento de novo no próximo ciclo)`)
             else if (r.why !== 'busy') noteOnce(ctx, runtime, `pin:${jobId}:${r.why}`, `pin: sessão ${jobId} continua na fila (${r.why === 'raced' ? 'ganhou pid antes da gravação' : (r.detail ?? 'falha ao parar')})`)
+            if (r.why === 'stop-failed' && opts.throttle !== undefined) {
+              runtime.notified[stopfail] = ctx.now()
+              tell(ctx, `Não consegui parar a sessão ${jobId} para aplicar o pedido; não tento de novo até um novo pedido.`)
+            }
             break
           default:
             removed.add(item)
             delete runtime.notified[`pin:${jobId}:stop-failed`]
+            delete runtime.notified[stopfail]
             out.push({ jobId, settings: item.settings, result: r.result })
             note(ctx, `pin: sessão ${jobId} ${r.result} (${item.reason})`)
             tell(ctx, `Sessão ${jobId}: ${item.reason === 'pin' ? `fixada em ${account}` : 'solta do pin'}${r.result === 'stopped-and-rewritten' ? '; reabra-a para valer' : ''}.`)

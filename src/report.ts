@@ -231,6 +231,16 @@ export function renderSwap(r: SwapReport, opts: RenderOpts): string {
   return `${lines.join('\n')}\n`
 }
 
+/** O que ficou para trás num troca/reinício: o que espera, o que não foi parado e o que o teto ou o recuo adiou. */
+function heldBack(x: { waitingBusy: string[]; keptScheduled: string[]; failed: Array<{ id: string; error: string }>; deferred?: string[] }): string[] {
+  const out: string[] = []
+  if (x.waitingBusy.length > 0) out.push(`  aguardando o fim do turno: ${x.waitingBusy.join(', ')}`)
+  if (x.keptScheduled.length > 0) out.push(`  mantidas, com trabalho agendado: ${x.keptScheduled.join(', ')}`)
+  for (const f of x.failed) out.push(`  não consegui parar ${f.id}: ${f.error}`)
+  if (x.deferred !== undefined && x.deferred.length > 0) out.push(`  adiadas para o próximo ciclo (teto de paradas ou falha anterior): ${x.deferred.join(', ')}`)
+  return out
+}
+
 /** `sb watch --once`: o que o ciclo mediu, avaliou e fez. */
 export function renderTick(r: TickReport): string {
   if (r.skipped === 'locked') return 'outro sb está com o lock do estado: nada foi feito neste ciclo\n'
@@ -239,10 +249,13 @@ export function renderTick(r: TickReport): string {
   for (const s of r.swaps) {
     lines.push(`troca no mux ${s.mux}: ${s.from} → ${s.to}`)
     if (s.stopped.length > 0) lines.push(`  paradas (reabra para usar ${s.to}): ${s.stopped.join(', ')}`)
+    lines.push(...heldBack(s))
   }
   for (const [mux, x] of Object.entries(r.restarts)) {
     if (r.swaps.some((s) => s.mux === mux)) continue
+    const held = heldBack(x)
     if (x.stopped.length > 0) lines.push(`mux ${mux}: sessões antigas paradas: ${x.stopped.join(', ')}`)
+    if (held.length > 0) lines.push(`mux ${mux}: sessões antigas`, ...held)
   }
   for (const p of r.pending) lines.push(p.result === 'queued' ? `fila: sessão ${p.jobId} ainda espera` : `fila: sessão ${p.jobId} ${p.result === 'gone' ? 'descartada' : p.result}`)
   if (r.kept.length > 0) lines.push(`mantidas (state.json sem inFlight; nunca reiniciadas): ${r.kept.join(', ')}`)

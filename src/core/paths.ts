@@ -51,6 +51,8 @@ export const usageFile = (p: Paths): string => join(p.stateDir, 'usage.json')
 export const runtimeFile = (p: Paths): string => join(p.stateDir, 'runtime.json')
 export const lockFile = (p: Paths): string => join(p.stateDir, 'lock')
 /** batimento do `sb watch` (`{ pid, lastTick }`): quem enfileira um pedido confere se o laço está vivo. */
+/** pid do laço `sb watch` em execução: impede um segundo laço (mesma mecânica do login). */
+export const watchPidFile = (p: Paths): string => join(p.stateDir, 'watch.pid')
 export const watchFile = (p: Paths): string => join(p.stateDir, 'watch.json')
 export const logFile = (p: Paths, which: 'watch' | 'login'): string => join(p.stateDir, 'log', `${which}.log`)
 export const backupDir = (p: Paths, stamp: string): string => join(p.stateDir, 'backup', stamp)

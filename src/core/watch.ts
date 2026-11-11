@@ -4,9 +4,9 @@ import { assertSessionId, SESSION_ID_RE } from './claude.js'
 import { loadConfig, parseDuration, type Config } from './config.js'
 import type { Ctx } from './ctx.js'
 import { EXIT, SbError } from './errors.js'
-import { isAlive, mkdirPrivate, peekPidFile, withLock, writeAtomic } from './fsx.js'
+import { acquirePidFile, isAlive, mkdirPrivate, peekPidFile, releasePidFile, withLock, writeAtomic } from './fsx.js'
 import { currentAccount, pointMux } from './links.js'
-import { lockFile, runtimeFile, watchFile } from './paths.js'
+import { lockFile, runtimeFile, watchFile, watchPidFile } from './paths.js'
 import { applyPending } from './pin.js'
 import { availability, desiredAccount, type MuxEval } from './rules.js'
 import { readRuntime, writeRuntime, type Runtime } from './runtime.js'
@@ -122,25 +122,47 @@ function recoverRuntime(ctx: Ctx, report: TickReport): void {
   }
 }
 
-/** Uma falha de uma etapa: sempre no relatório do ciclo, mas no log (e `runtime.notified`) só na primeira vez. */
-function fail(ctx: Ctx, report: TickReport, step: string, e: SbError, runtime?: Runtime): void {
+/** Etapas que rodaram / falharam neste ciclo: uma pane de etapa só se encerra quando um ciclo roda a etapa sem falhar. */
+interface Steps {
+  ran: Set<string>
+  failed: Set<string>
+}
+
+/**
+ * Uma falha de uma etapa (`agents`, `pins`, `swap:<mux>`, `semlink:<mux>`): sempre no relatório do ciclo; no log e na
+ * notificação só na PRIMEIRA vez de cada pane. A chave é `err:<etapa>:<exit>` (nunca o texto: `claude agents` inclui um
+ * trecho da saída, que varia); {@link clearRecovered} a apaga no fim do primeiro ciclo em que a etapa roda sem falhar,
+ * então uma nova pane avisa de novo.
+ */
+function fail(ctx: Ctx, report: TickReport, steps: Steps, step: string, e: SbError, runtime?: Runtime): void {
   const msg = redact(e.message)
+  steps.ran.add(step)
+  steps.failed.add(step)
   report.notices.push(`${step}: ${msg}`)
-  const key = `err:${msg}` // por mensagem: `claude agents` fora do ar falha igual em todo mux e vai ao log uma vez só
-  const first = (r: Runtime): boolean => {
-    if (r.notified[key] !== undefined) return false
+  const key = `err:${step}:${e.exit}`
+  let first = false
+  const mark = (r: Runtime): void => {
+    if (r.notified[key] !== undefined) return
     r.notified[key] = ctx.now()
-    return true
+    first = true
   }
-  if (runtime !== undefined) {
-    if (first(runtime)) note(ctx, `${step}: ${msg}`)
-    return
+  if (runtime !== undefined) mark(runtime)
+  else mutateRuntime(ctx, mark)
+  if (first) {
+    note(ctx, `${step}: ${msg}`)
+    tell(ctx, `Problema no watch (${step}): ${msg}`)
   }
-  let isFirst = false
+}
+
+/** Apaga as chaves `err:` das etapas que rodaram neste ciclo sem falhar (a pane acabou). */
+function clearRecovered(ctx: Ctx, steps: Steps): void {
   mutateRuntime(ctx, (r) => {
-    isFirst = first(r)
+    for (const key of Object.keys(r.notified)) {
+      if (!key.startsWith('err:')) continue
+      const step = key.slice(4, key.lastIndexOf(':'))
+      if (steps.ran.has(step) && !steps.failed.has(step)) delete r.notified[key]
+    }
   })
-  if (isFirst) note(ctx, `${step}: ${msg}`)
 }
 
 /** Aviso que vai UMA vez (log + notificação) por chave de `runtime.notified`. `true` se foi agora. */
@@ -238,20 +260,21 @@ function snapshotOf(ctx: Ctx, s: Session): Record<string, unknown> {
  * viva fica `limit-blocked` → um snapshot no `watch.log`; sessões vivas de mux sem `inFlight` → lista "mantidas" (uma linha
  * no log por sessão); poda de `runtime.notified`. `claude agents` fora do ar não derruba o ciclo: pula o que depende da lista.
  */
-function scanSessions(ctx: Ctx, runtime: Runtime, report: TickReport): void {
+function scanSessions(ctx: Ctx, runtime: Runtime, report: TickReport, steps: Steps): void {
   const now = ctx.now()
   let sessions: Session[] | null = null
+  steps.ran.add('agents')
   try {
     sessions = loadSessionsDeduped(ctx, runtime)
   } catch (e) {
     if (!(e instanceof SbError)) throw e
-    fail(ctx, report, 'sessões', e, runtime)
+    fail(ctx, report, steps, 'agents', e, runtime)
   }
   if (sessions !== null) {
     for (const s of sessions) {
       const id = s.agent.id
       const limit = `limit:${id}`
-      if (!isLimitBlocked(s)) delete runtime.notified[limit] // um novo bloqueio, depois, volta a ter snapshot
+      if (!(s.live && isLimitBlocked(s))) delete runtime.notified[limit] // um novo bloqueio, depois, volta a ter snapshot
       else if (runtime.notified[limit] === undefined) {
         runtime.notified[limit] = now
         note(ctx, `sessão ${id} ficou presa por limite: ${JSON.stringify(snapshotOf(ctx, s))}`)
@@ -299,11 +322,12 @@ interface MuxCtx {
   report: TickReport
   restartOpts: RestartOptions
   swapped: Set<string>
+  steps: Steps
 }
 
 /** Um mux por ciclo: link ausente → preferida; troca interrompida → grava `since`; avalia; cooldown; troca ou avisa. */
 function handleMux(c: MuxCtx, mux: string): void {
-  const { ctx, cfg, usage, report } = c
+  const { ctx, cfg, usage, report, steps } = c
   const m = cfg.mux[mux]!
   const now = ctx.now()
   let current = currentAccount(ctx.paths, mux)
@@ -312,7 +336,7 @@ function handleMux(c: MuxCtx, mux: string): void {
     const pref = m.account
     ensureState(ctx.paths)
     if (pref !== KEYCHAIN && !hasToken(ctx.paths, pref)) {
-      noticeOnce(ctx, report, `err:semlink:${mux}`, `mux ${mux}: o link não existe e a preferida "${pref}" não tem token; rode \`sb login ${pref}\``)
+      fail(ctx, report, steps, `semlink:${mux}`, new SbError(`mux ${mux}: o link não existe e a preferida "${pref}" não tem token; rode \`sb login ${pref}\``, EXIT.CHECK_FAILED))
       return
     }
     pointMux(ctx.paths, mux, pref)
@@ -321,6 +345,7 @@ function handleMux(c: MuxCtx, mux: string): void {
     report.notices.push(msg)
     current = pref
   }
+  steps.ran.add(`semlink:${mux}`)
 
   // Troca interrompida entre `pointMux` e a gravação de `since` (a queda deixa o link na conta nova e `lastSwap.to` na antiga):
   // sem `since` o restartStale nunca reinicia as sessões antigas. Só vale com `lastSwap` registrado (sem ele o link pode
@@ -403,33 +428,37 @@ async function runTick(ctx: Ctx, cfg: Config, opts: TickOptions, report: TickRep
   mutateRuntime(ctx, (r) => {
     for (const [mux, o] of Object.entries(r.overrides)) if (!(o.until > now)) delete r.overrides[mux]
   })
-  mutateRuntime(ctx, (r) => scanSessions(ctx, r, report))
+  const steps: Steps = { ran: new Set(), failed: new Set() }
+  mutateRuntime(ctx, (r) => scanSessions(ctx, r, report, steps))
 
-  const c: MuxCtx = { ctx, cfg, usage, report, restartOpts, swapped: new Set() }
+  const c: MuxCtx = { ctx, cfg, usage, report, restartOpts, swapped: new Set(), steps }
   for (const mux of Object.keys(cfg.mux)) {
+    steps.ran.add(`swap:${mux}`)
     try {
       handleMux(c, mux)
     } catch (e) {
       if (!(e instanceof SbError)) throw e
-      fail(ctx, report, `mux ${mux}`, e)
+      fail(ctx, report, steps, e.exit === EXIT.CLAUDE ? 'agents' : `swap:${mux}`, e) // `claude` fora do ar é uma pane só, em qualquer etapa
     }
   }
 
   for (const mux of Object.keys(cfg.mux)) {
     if (c.swapped.has(mux)) continue // o `applySwap` já reiniciou as sessões deste mux, com o mesmo teto
+    steps.ran.add('agents')
     try {
       report.restarts[mux] = restartStale(ctx, cfg, mux, restartOpts)
     } catch (e) {
       if (!(e instanceof SbError)) throw e
-      fail(ctx, report, `mux ${mux}`, e)
+      fail(ctx, report, steps, 'agents', e)
     }
   }
 
+  steps.ran.add('pins')
   try {
     report.pending = applyPending(ctx, cfg, restartOpts)
   } catch (e) {
     if (!(e instanceof SbError)) throw e
-    fail(ctx, report, 'fila de pins', e)
+    fail(ctx, report, steps, e.exit === EXIT.CLAUDE ? 'agents' : 'pins', e)
   }
   // `applyPending` já avisa o que aplicou e nunca o que ainda espera (`queued`); o que saiu da fila sem ser aplicado, não
   for (const p of report.pending) {
@@ -441,6 +470,7 @@ async function runTick(ctx: Ctx, cfg: Config, opts: TickOptions, report: TickRep
       report.notices.push(`sessão ${p.jobId}: ${p.result}`)
     }
   }
+  clearRecovered(ctx, steps)
 }
 
 /**
@@ -553,6 +583,16 @@ export interface LoopOptions {
  * Nenhum erro derruba o laço. Sai limpo quando `signal` dispara (apaga o batimento, se ainda for o nosso).
  */
 export async function watchLoop(ctx: Ctx, intervalMs = WATCH_INTERVAL_MS, opts: LoopOptions = {}): Promise<void> {
+  // um só laço por máquina (dois seriam corretos pelo lock, mas redundantes e brigariam pelo batimento)
+  const pidFile = watchPidFile(ctx.paths)
+  const got = await acquirePidFile(pidFile)
+  if (!got.ok) {
+    throw new SbError(
+      got.pid === undefined ? `não consegui tomar ${pidFile}: outro sb watch pode estar rodando` : `já existe um sb watch rodando (pid ${got.pid})`,
+      EXIT.LOCKED,
+      `  se não há outro watch rodando, apague ${pidFile}`,
+    )
+  }
   const memory = newMemory()
   const sleep = opts.sleep ?? sleepUntil
   let lastError: string | undefined
@@ -578,6 +618,7 @@ export async function watchLoop(ctx: Ctx, intervalMs = WATCH_INTERVAL_MS, opts: 
     }
   } finally {
     removeHeartbeat(ctx)
+    releasePidFile(pidFile)
     note(ctx, 'watch encerrado')
   }
 }

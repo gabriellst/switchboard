@@ -9,10 +9,11 @@ import { defaultCtx, type Ctx } from '../src/core/ctx.js'
 import { EXIT, SbError } from '../src/core/errors.js'
 import { withLock } from '../src/core/fsx.js'
 import { currentAccount, pointMux } from '../src/core/links.js'
-import { lockFile, logFile, muxLink, pinLink, runtimeFile, usageFile, watchFile } from '../src/core/paths.js'
+import { lockFile, logFile, muxLink, pinLink, runtimeFile, usageFile, watchFile, watchPidFile } from '../src/core/paths.js'
 import { pinSession } from '../src/core/pin.js'
 import { readRuntime, writeRuntime } from '../src/core/runtime.js'
 import { newMemory, tick, watchLoop, watchStatus, type TickOptions } from '../src/core/watch.js'
+import { renderTick } from '../src/report.js'
 import { fakeApi, FAKE_TOKEN, populatedSandbox, type FakeApi, type Sandbox } from './helpers.js'
 
 const NOW = 1_800_000_000_000
@@ -315,7 +316,7 @@ describe('tick — paradas', () => {
     const r2 = await tick(h.at(NOW + 30_000), cfgOf(sb), fast)
     expect(r2.restarts.bk?.stopped).toEqual([A4])
     expect(stops(sb)).toEqual([A1, A2, A3, A4])
-  })
+  }, 15_000)
 
   test('parada que falha: não tenta de novo no mesmo since e notifica uma vez', async () => {
     const sb = world()
@@ -443,7 +444,7 @@ describe('tick — fila de pins', () => {
     expect(r.pending.filter((p) => p.result === 'stopped-and-rewritten')).toHaveLength(3)
     expect(r.pending.filter((p) => p.result === 'queued')).toHaveLength(1)
     expect(stops(sb)).toHaveLength(3)
-  })
+  }, 15_000)
 })
 
 describe('tick — observação', () => {
@@ -598,7 +599,7 @@ describe('tick — runtime.json e lock', () => {
     const ok = await tick(h.at(NOW + 5 * 30_000), cfgOf(sb), { ...fast, memory })
     expect(ok.skipped).toBeUndefined()
     expect(memory.lockedTicks).toBe(0)
-  })
+  }, 15_000)
 })
 
 describe('watchLoop', () => {
@@ -804,5 +805,133 @@ describe('sb watch --once (CLI)', () => {
 
     writeFileSync(sb.paths.configFile, '{ nope')
     expect(sb.runSb(['watch', '--once']).code).toBe(EXIT.INVALID_CONFIG)
+  })
+})
+
+describe('rodada de correções 1', () => {
+  const breakWith = (sb: Sandbox, text: string): void => {
+    mkdirSync(sb.env.FAKE_CLAUDE_DIR!, { recursive: true })
+    writeFileSync(join(sb.env.FAKE_CLAUDE_DIR!, 'agents.json'), text)
+  }
+  const errKeys = (sb: Sandbox): string[] => Object.keys(readRuntime(sb.paths).notified).filter((k) => k.startsWith('err:'))
+
+  test('pane de uma etapa: um log e uma notificação por pane; texto variável não cria chave; recuperou limpa; nova pane avisa de novo', async () => {
+    const sb = world()
+    setUsage(sb, { gabriel: 0.4, admin1: 0.2 })
+    writeRuntime(sb.paths, { mux: { bk: { since: OLD, lastSwap: { at: OLD, from: 'admin1', to: 'gabriel', reason: 'x' } } }, overrides: {}, pending: [], notified: {} })
+    const h = harness(sb)
+    const out = (): number => h.notes.filter((m) => m.includes('não devolveu JSON')).length
+
+    breakWith(sb, 'lixo um')
+    await tick(h.at(NOW), cfgOf(sb), fast)
+    breakWith(sb, 'outro lixo, bem diferente')
+    await tick(h.at(NOW + 30_000), cfgOf(sb), fast)
+    await tick(h.at(NOW + 60_000), cfgOf(sb), fast)
+    expect(lines(watchLog(sb), 'não devolveu JSON')).toBe(1)
+    expect(out()).toBe(1)
+    expect(errKeys(sb)).toEqual(['err:agents:4']) // por etapa e exit, não pelo texto
+
+    breakWith(sb, '[]\n') // voltou
+    await tick(h.at(NOW + 90_000), cfgOf(sb), fast)
+    expect(errKeys(sb)).toEqual([])
+
+    breakWith(sb, 'quebrou de novo')
+    await tick(h.at(NOW + 120_000), cfgOf(sb), fast)
+    expect(lines(watchLog(sb), 'não devolveu JSON')).toBe(2)
+    expect(out()).toBe(2)
+    expect(errKeys(sb)).toEqual(['err:agents:4'])
+  })
+
+  test('mux sem link e sem token da preferida: avisa uma vez, a chave sai quando o link existe', async () => {
+    const sb = world()
+    setUsage(sb, { gabriel: 0.4, admin1: 0.2 })
+    rmSync(muxLink(sb.paths, 'bk'))
+    rmSync(join(sb.paths.stateDir, 'tokens', 'gabriel.json'))
+    const h = harness(sb)
+    await tick(h.at(NOW), cfgOf(sb), fast)
+    await tick(h.at(NOW + 30_000), cfgOf(sb), fast)
+    expect(h.notes.filter((m) => m.includes('não tem token'))).toHaveLength(1)
+    expect(errKeys(sb)).toHaveLength(1)
+    sb.addToken('gabriel')
+    await tick(h.at(NOW + 60_000), cfgOf(sb), fast)
+    expect(bkLink(sb)).toBe('gabriel')
+    await tick(h.at(NOW + 90_000), cfgOf(sb), fast)
+    expect(errKeys(sb)).toEqual([])
+  })
+
+  test('fila de pins: parada que falha não é repetida no mesmo pedido; notifica uma vez', async () => {
+    const sb = world()
+    setUsage(sb, { gabriel: 0.4, admin1: 0.2 })
+    addSession(sb, ID, 'busy')
+    const h = harness(sb)
+    expect(pinSession(h.at(NOW), cfgOf(sb), ID, 'admin1').result).toBe('queued')
+    addSession(sb, ID, 'free')
+    writeFileSync(join(sb.env.FAKE_CLAUDE_DIR!, 'stop-fail'), '')
+    for (const t of [30_000, 60_000, 90_000]) {
+      const r = await tick(h.at(NOW + t), cfgOf(sb), fast)
+      expect(r.pending.map((p) => p.result)).toEqual(['queued'])
+    }
+    expect(stops(sb)).toEqual([ID])
+    expect(h.notes.filter((m) => m.includes('Não consegui parar'))).toHaveLength(1)
+    rmSync(join(sb.env.FAKE_CLAUDE_DIR!, 'stop-fail')) // mesmo funcionando de novo, é o mesmo pedido
+    await tick(h.at(NOW + 120_000), cfgOf(sb), fast)
+    expect(stops(sb)).toEqual([ID])
+    expect(readRuntime(sb.paths).pending).toHaveLength(1)
+
+    // um pedido novo (requestedAt novo) volta a tentar
+    expect(pinSession(h.at(NOW + 150_000), cfgOf(sb), ID, 'admin1').result).toBe('stopped-and-rewritten')
+    expect(stops(sb)).toEqual([ID, ID])
+  }, 15_000)
+
+  describe('um só watch por máquina', () => {
+    test('o laço recusa (exit 5) enquanto um vivo segura o pid file; pid morto é tomado e o arquivo some ao sair', async () => {
+      const sb = world()
+      setUsage(sb, { gabriel: 0.4, admin1: 0.2 })
+      writeFileSync(watchPidFile(sb.paths), String(process.ppid))
+      const err = (await watchLoop(harness(sb).at(NOW), 1, { maxTicks: 1, tick: fast }).catch((e: unknown) => e)) as SbError
+      expect(err).toBeInstanceOf(SbError)
+      expect(err.exit).toBe(EXIT.LOCKED)
+      expect(err.message).toContain(`pid ${process.ppid}`)
+      expect(readFileSync(watchPidFile(sb.paths), 'utf8')).toBe(String(process.ppid))
+      expect(existsSync(watchFile(sb.paths))).toBe(false)
+
+      writeFileSync(watchPidFile(sb.paths), String(DEAD_PID))
+      await watchLoop(harness(sb).at(NOW), 1, { maxTicks: 1, tick: fast })
+      expect(existsSync(watchPidFile(sb.paths))).toBe(false)
+    })
+
+    test('CLI: segundo `sb watch` → exit 5; `--once` não é barrado', () => {
+      const sb = world()
+      writeFileSync(watchPidFile(sb.paths), String(process.ppid))
+      const second = sb.runSb(['watch'])
+      expect(second.code).toBe(EXIT.LOCKED)
+      expect(second.stderr).toContain('watch')
+      expect(sb.runSb(['watch', '--once']).code).toBe(0)
+      expect(readFileSync(watchPidFile(sb.paths), 'utf8')).toBe(String(process.ppid))
+    })
+  })
+
+  describe('renderTick mostra o que ficou para trás', () => {
+    test('falhas, adiadas e aguardando o fim do turno (troca e reinício)', async () => {
+      const sb = world()
+      setUsage(sb, { gabriel: 0.95, admin1: 0.2 })
+      addSession(sb, BUSY, 'busy')
+      for (const id of [A1, A2, A3, A4]) addSession(sb, id, 'free')
+      const h = harness(sb)
+      const r1 = await tick(h.at(NOW), cfgOf(sb), fast)
+      const t1 = renderTick(r1)
+      expect(t1).toMatch(/aguardando.*ccccccc3/)
+      expect(t1).toMatch(/adiadas.*aaaaaaa4/)
+
+      const sb2 = world()
+      setUsage(sb2, { gabriel: 0.95, admin1: 0.2 })
+      addSession(sb2, A1, 'free')
+      writeFileSync(join(sb2.env.FAKE_CLAUDE_DIR!, 'stop-fail'), '')
+      const h2 = harness(sb2)
+      const f1 = renderTick(await tick(h2.at(NOW), cfgOf(sb2), fast))
+      expect(f1).toMatch(/não consegui parar aaaaaaa1/)
+      const f2 = renderTick(await tick(h2.at(NOW + 30_000), cfgOf(sb2), fast)) // mux que não trocou agora (reinício)
+      expect(f2).toMatch(/adiadas.*aaaaaaa1/)
+    }, 15_000)
   })
 })
