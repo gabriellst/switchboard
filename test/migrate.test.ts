@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { install as realInstall, installPreconditions } from '../src/commands/install.js'
 import { runMigrate } from '../src/commands/migrate.js'
 import { loadConfig } from '../src/core/config.js'
 import type { Ctx } from '../src/core/ctx.js'
@@ -548,6 +549,34 @@ describe('planMigration', () => {
 // ------------------------------------------------------------------------------------------------------ aplicar
 
 describe('applyMigration', () => {
+  test('sem `claude` no PATH o `sb install` não teria como rodar: recusa (exit 4) ANTES de qualquer escrita (zshrc, conta.md, tokens, backup)', async () => {
+    const w = world()
+    const plan = await planMigration(rig(w.sb).ctx)
+    const semClaude = join(w.sb.dir, 'path-vazio')
+    mkdirSync(semClaude, { recursive: true })
+    const env = { ...w.sb.env, PATH: semClaude }
+    delete (env as Record<string, string | undefined>).SWITCHBOARD_CLAUDE
+    const r = rig(w.sb, { env, now: () => NOW })
+    const before = snapshot(w.sb.dir, skipFakeClaude)
+    // as dependências de verdade do comando: o `install` real, com as precondições dele
+    const e = await catching(() => applyMigration(r.ctx, plan, { install: (c) => realInstall(c, { simular: false }), check: installPreconditions }))
+    expect(e.exit).toBe(EXIT.CLAUDE)
+    expect(e.message).toContain('claude')
+    expect(snapshot(w.sb.dir, skipFakeClaude)).toEqual(before)
+    expect(readFileSync(join(homeOf(w.sb), '.zshrc'), 'utf8')).toContain(OLD_LINE) // novos terminais continuam com o wrapper do claude-conta
+    expect(existsSync(contaMd(w.sb))).toBe(true)
+    expect(r.launchctl).toEqual([])
+    expect(readRuntime(w.sb.paths).pending).toEqual([])
+  })
+
+  test('as precondições passam com o `claude` achável: a migração segue normalmente', async () => {
+    const w = world()
+    const r = rig(w.sb)
+    const plan = await planMigration(r.ctx)
+    const res = await applyMigration(r.ctx, plan, { install: installFor(w.sb), check: installPreconditions })
+    expect(res.zshrc).toBe('replaced')
+  })
+
   test('tokens 600 em tokens/ (700), config, links; keychain = {}', async () => {
     const w = world()
     const { res } = await migrate(w)

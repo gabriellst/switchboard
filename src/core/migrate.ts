@@ -85,6 +85,8 @@ export interface MigrationResult {
 export interface MigrateDeps {
   /** o `sb install` (grava wrapper/plist/`sb.md` e carrega o LaunchAgent); injetado para o núcleo não conhecer o `argv` */
   install(ctx: Ctx): InstallResult
+  /** as precondições do `install` (ex.: `claude` no PATH): lança antes de a migração escrever qualquer coisa */
+  check?(ctx: Ctx): void
 }
 
 // ------------------------------------------------------------------------------------------------------- leitura
@@ -519,6 +521,9 @@ function note(ctx: Ctx, line: string): void {
  * tokens, recalcula o destino de cada sessão, confere o vigia de novo e usa a config do disco.
  */
 export async function applyMigration(ctx: Ctx, plan: MigrationPlan, deps: MigrateDeps): Promise<MigrationResult> {
+  // as precondições do `sb install` (passo 9) antes do lock e de qualquer escrita: sem elas o install lançaria no fim, com o zshrc
+  // e o `conta.md` já trocados e novos terminais com um `claude` que recusa
+  deps.check?.(ctx)
   return withLock(ctx.paths, async () => {
     const { paths } = ctx
     const warnings = [...plan.warnings]

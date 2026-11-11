@@ -5,7 +5,7 @@ import type { InstallResult } from '../core/install.js'
 import { applyMigration, finishMigration, planMigration, type MigrateDeps } from '../core/migrate.js'
 import { renderFinish, renderMigration, renderMigrationPlan } from '../report.js'
 import { guarded } from './guard.js'
-import { install } from './install.js'
+import { install, installPreconditions } from './install.js'
 
 export interface MigrateArgs {
   simular?: boolean
@@ -25,7 +25,7 @@ const json = (v: unknown): string => `${JSON.stringify(v, null, 2).replace(TOKEN
 export async function runMigrate(
   ctx: Ctx,
   args: MigrateArgs,
-  deps: MigrateDeps = { install: (c) => install(c, { simular: false }) },
+  deps: MigrateDeps = { install: (c) => install(c, { simular: false }), check: installPreconditions },
 ): Promise<{ text: string; exit: ExitCode }> {
   const home = ctx.paths.home
   if (args.finish === true) {

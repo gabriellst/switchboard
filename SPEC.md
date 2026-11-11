@@ -366,7 +366,8 @@ A view cujo `--settings` está em `pins/` é aceita (não roda no keychain).
 `planMigration` não escreve nada (nem estado, nem lock, nem log, nem medição) e `--simular` só o imprime.
 Recusas, antes de qualquer escrita: sem `~/.claude/contas` (exit 3); sem view `claude agents --cwd
 <pasta existente>` aberta e sem `default` na config (exit 3; o `default` nunca é o mux do keychain);
-config inválida (exit 2); `claude agents` ilegível (exit 4).
+config inválida (exit 2); `claude agents` ilegível (exit 4); `claude` fora do PATH, que o `sb install` do passo 9
+exige (exit 4; a conferência vem antes do lock e de qualquer escrita, para o zshrc não ficar trocado sem wrapper).
 
 `applyMigration`, sob o lock, na ordem: (0) recusas; (1) backup em `backup/migrate-<data>/` (cópia de
 `contas`, `contas-fixas`, `commands/conta.md`, `~/.zshrc`; diretórios 700, arquivos 600); (2) tokens

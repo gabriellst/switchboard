@@ -13,6 +13,15 @@ function selfCommand(env: Ctx['env']): { runtimeBin: string; cliPath: string } {
   return { runtimeBin: stableRuntime(env, process.execPath), cliPath: realpathSync(script) }
 }
 
+/**
+ * O que o `install` exige e pode faltar (o `claude` no PATH; o caminho do próprio cli). Quem escreve ANTES de instalar (o
+ * `sb migrate`) confere aqui primeiro: um `install` que lança no meio da migração deixaria o zshrc já trocado.
+ */
+export function installPreconditions(ctx: Ctx): void {
+  selfCommand(ctx.env)
+  findClaudeDir(ctx.env)
+}
+
 export function install(ctx: Ctx, opts: { simular: boolean }): InstallResult {
   const plan = planInstall(ctx.paths, { ...selfCommand(ctx.env), claudeDir: findClaudeDir(ctx.env) })
   return runInstall(ctx, plan, opts)
