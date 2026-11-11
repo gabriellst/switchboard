@@ -310,7 +310,7 @@ agents` com o settings antigo; ou `ps` indisponível. Nada é apagado: o `--fini
 | `sb login <conta> [--terminal] [--attach <mux> [--pool \| --at N] [--preferred]]` | login por `setup-token` (ou token colado) |
 | `sb attach <conta> <mux> [--pool \| --at N] [--preferred] [--json]` · `sb detach <conta> <mux> [--json]` | liga/desliga uma conta de um mux |
 | `sb mux [list] [--json]` · `sb mux add <nome> --root <pasta> --account <conta> [--accounts a,b] [--pool a,b]` | muxes |
-| `sb mux set <nome> [--root] [--account] [--accounts] [--pool] [--default]` · `sb mux rm <nome>` | só a config; a conta atual não troca |
+| `sb mux set <nome> [--root] [--account] [--accounts] [--pool] [--default]` · `sb mux rm <nome>` | só a config; a conta atual não troca (e `--accounts` não pode tirá-la: `sb swap` antes, exit 3) |
 | `sb agents [mux]` · `sb run [mux] -- <args do claude>` | abre o `claude agents` / o `claude` com o settings do mux |
 | `sb which [pasta] [--json]` | caminho do settings do mux da pasta (é o que o wrapper usa) |
 | `sb swap <mux> [conta] [--clear] [--json]` | troca manual (vale até o reset da preferida) |

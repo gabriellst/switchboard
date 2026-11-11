@@ -186,6 +186,31 @@ describe('setMux', () => {
     expect(readFileSync(sb.paths.configFile, 'utf8')).toBe(before)
   })
 
+  test('set --accounts que tira a conta ATUAL (o link aponta para ela) → exit 3 mandando fazer `sb swap` antes; config e link intactos', async () => {
+    const sb = setup(withComments)
+    mkdirSync(join(sb.paths.stateDir, 'mux'), { recursive: true })
+    symlinkSync(tokenFile(sb.paths, 'admin1'), muxLink(sb.paths, 'bk')) // atual = admin1; preferida = gabriel
+    const before = readFileSync(sb.paths.configFile, 'utf8')
+    const e = await run(setMux(sb.ctx(), 'bk', { accounts: ['gabriel'], pool: ['gabriel'] }))
+    expect(e?.exit).toBe(EXIT.USAGE)
+    expect(e?.message).toContain('admin1')
+    expect(`${e?.message}${e?.detail}`).toContain('sb swap bk')
+    expect(readFileSync(sb.paths.configFile, 'utf8')).toBe(before)
+    expect(currentAccount(sb.paths, 'bk')).toBe('admin1')
+    // só --accounts (sem --pool) também: a recusa vem antes de qualquer edição
+    expect(await exitOf(setMux(sb.ctx(), 'bk', { accounts: ['gabriel'] }))).toBe(EXIT.USAGE)
+    expect(readFileSync(sb.paths.configFile, 'utf8')).toBe(before)
+  })
+
+  test('set --accounts que tira outra conta (não a atual) continua valendo', async () => {
+    const sb = setup(withComments)
+    mkdirSync(join(sb.paths.stateDir, 'mux'), { recursive: true })
+    symlinkSync(tokenFile(sb.paths, 'gabriel'), muxLink(sb.paths, 'bk')) // atual = gabriel
+    const r = await setMux(sb.ctx(), 'bk', { accounts: ['gabriel'], pool: ['gabriel'] })
+    expect(r.changed.sort()).toEqual(['accounts', 'pool'])
+    expect((await loadConfig(sb.paths)).mux.bk!.accounts).toEqual(['gabriel'])
+  })
+
   test('set --root e --default', async () => {
     const sb = setup(withComments)
     await addMux(sb.ctx(), 'outro', { root: '~/outro', account: 'admin1', accounts: ['admin1'] })

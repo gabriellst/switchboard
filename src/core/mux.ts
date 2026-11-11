@@ -4,7 +4,7 @@ import { editConfig, loadConfig, type Config, type ConfigEdit } from './config.j
 import type { Ctx } from './ctx.js'
 import { EXIT, SbError } from './errors.js'
 import { withLock } from './fsx.js'
-import { pointMux } from './links.js'
+import { currentAccount, pointMux } from './links.js'
 import { assertSafeName } from './paths.js'
 import { KEYCHAIN, normalizeRoot } from './schema.js'
 import { ensureConfig } from './config.js'
@@ -137,6 +137,11 @@ export async function setMux(ctx: Ctx, name: string, p: SetMuxOpts): Promise<{ c
     if (!m) throw usage(`mux inexistente: "${name}"`, `  muxes: ${Object.keys(cfg.mux).join(', ') || 'nenhum'}`)
     if (p.account !== undefined && p.account !== m.account && p.account !== KEYCHAIN && !hasToken(ctx.paths, p.account)) {
       throw usage(`a conta preferida "${p.account}" não tem token: rode \`sb login ${p.account}\``)
+    }
+    // como o `detachAccount`: tirar a conta atual deixaria o mux numa conta fora do próprio `accounts` (e, com o pool vazio, para sempre)
+    const current = currentAccount(ctx.paths, name)
+    if (p.accounts !== undefined && current !== null && m.accounts.includes(current) && !p.accounts.includes(current)) {
+      throw usage(`"${current}" é a conta atual do mux "${name}": não dá para tirá-la de --accounts`, `  faça \`sb swap ${name}\` antes (ou \`sb swap ${name} <conta>\`) e repita`)
     }
     const edits: ConfigEdit[] = []
     const changed: string[] = []
