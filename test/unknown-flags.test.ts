@@ -174,3 +174,11 @@ test('valor negativo de uma opção com valor (`--every -5`) não é tomado por 
   expect(() => assertKnownFlags(def, ['--every', '-1.5', '--json'])).not.toThrow()
   expect(() => assertKnownFlags(def, ['--json', '-5'])).toThrow(SbError) // booleana não leva valor: -5 é opção desconhecida
 })
+
+test('o `detail` de um erro sai com UMA indentação de dois espaços (não quatro)', () => {
+  const sb = populatedSandbox()
+  const r = sb.runSb(['swap', 'bk', '--bogus'])
+  const detail = r.stderr.split('\n').find((l) => l.includes('nada foi feito'))
+  expect(detail).toBeDefined()
+  expect(detail).toMatch(/^ {2}\S/)
+})

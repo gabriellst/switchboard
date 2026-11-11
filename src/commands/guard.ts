@@ -66,7 +66,8 @@ export function guarded<T extends GuardCtx>(fn: (ctx: T) => Promise<void>): (ctx
       await fn(ctx)
     } catch (e) {
       if (e instanceof SbError) {
-        console.error(`✗ ${e.message}${e.detail ? `\n  ${e.detail}` : ''}`)
+        // os `detail` já vêm com a indentação de dois espaços; só quem não a traz ganha uma
+        console.error(`✗ ${e.message}${e.detail ? `\n${/^\s/.test(e.detail) ? '' : '  '}${e.detail}` : ''}`)
         process.exitCode = e.exit
         return
       }
