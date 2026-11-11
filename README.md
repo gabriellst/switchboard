@@ -280,10 +280,16 @@ O que o passo 3 faz: copia `~/.claude/contas`, `contas-fixas`, `commands/conta.m
 `<estado>/backup/migrate-<data>/`; importa os tokens; cria um mux por raiz de `contas/excluir` (na
 conta do keychain, sem pool) e um por view aberta (com todas as contas importadas, a ativa na frente
 do pool); reescreve as sessões **paradas** (`contas/ativa.json` vira o mux da pasta,
-`contas-fixas/<c>.json` vira `pins/<c>.json`) e põe as vivas na fila do `watch`; para o vigia do
+`contas-fixas/<c>.json` vira `pins/<c>.json`) e põe as vivas na fila do `watch` (veja o aviso abaixo); para o vigia do
 `claude-conta`; troca a linha `# claude-conta` do `~/.zshrc` pela do `sb`; troca `/conta` por `/sb`;
-roda o `sb install`. Nunca para uma sessão, nunca toca o keychain, e rodar de novo termina o serviço
-sem duplicar nada. O script `~/.local/bin/claude-conta` não é tocado.
+roda o `sb install`. O `sb migrate` em si não para nenhuma sessão, nunca toca o keychain, e rodar de novo
+termina o serviço sem duplicar nada.
+
+**O `watch` vai PARAR cada sessão viva do `claude-conta`.** Para trocar o `--settings` dela, o `watch`
+roda `claude stop` em cada sessão viva da fila assim que ela fica livre (até 3 por ciclo de 30 s),
+inclusive uma que você esteja lendo entre dois turnos. Ela volta, já nas contas novas, quando você a
+reabre. Uma sessão no meio de um turno ou com trabalho agendado nunca é interrompida: espera. O
+`--simular` e a saída do `sb migrate` mostram quantas sessões vivas isso atinge. O script `~/.local/bin/claude-conta` não é tocado.
 
 O `--simular` só aponta duplicatas pelo token idêntico; o passo 3 também as acha pela medição de uso.
 O `--finish` **recusa** (exit 1, com a lista) enquanto houver: a linha `# claude-conta` no

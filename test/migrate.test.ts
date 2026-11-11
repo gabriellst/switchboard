@@ -1101,6 +1101,40 @@ describe('runMigrate (comando)', () => {
     expect(json.text).not.toMatch(TOKEN_ANY)
   })
 
+  test('--simular diz com todas as letras que o watch PARA cada sessão viva quando estiver livre, e quantas são', async () => {
+    const w = world() // duas vivas (uma livre, uma ocupada) e quatro paradas
+    const out = await runMigrate(rig(w.sb).ctx, { simular: true }, { install: installFor(w.sb) })
+    expect(out.text).toContain('2 sessões vivas serão PARADAS pelo watch')
+    expect(out.text).toContain('quando estiverem livres')
+    expect(out.text).toContain('reabra')
+    expect(out.text).toMatch(/meio de um turno|trabalho agendado/)
+    expect(out.text).toContain('nunca é interrompida')
+    expect(out.text).not.toContain('reescreve quando estiver livre') // a redação antiga escondia a parada
+    expect(out.text).not.toMatch(TOKEN_ANY)
+  })
+
+  test('aplicar repete o aviso e a contagem (sessões vivas na fila)', async () => {
+    const w = world()
+    const out = await runMigrate(rig(w.sb).ctx, {}, { install: installFor(w.sb) })
+    expect(out.text).toContain('2 sessões vivas serão PARADAS pelo watch')
+    expect(out.text).toContain('quando estiverem livres')
+    expect(out.text).toContain('nunca é interrompida')
+    expect(out.text).not.toContain('o watch reescreve quando')
+    expect(readRuntime(w.sb.paths).pending.filter((i) => i.reason === 'migrate').length).toBe(2)
+  })
+
+  test('uma sessão viva só: singular; nenhuma viva: nenhum aviso de parada', async () => {
+    const one = world({ noSessions: true })
+    addSession(one.sb, ID_LIVE_ATIVA, ['--settings', '~/.claude/contas/ativa.json'], 'free', { cwd: join(homeOf(one.sb), 'p', 'bk') })
+    const plan1 = await runMigrate(rig(one.sb).ctx, { simular: true }, { install: installFor(one.sb) })
+    expect(plan1.text).toContain('1 sessão viva será PARADA pelo watch quando estiver livre')
+    const none = world({ noSessions: true })
+    const plan0 = await runMigrate(rig(none.sb).ctx, { simular: true }, { install: installFor(none.sb) })
+    expect(plan0.text).not.toContain('PARADA')
+    const res0 = await runMigrate(rig(none.sb).ctx, {}, { install: installFor(none.sb) })
+    expect(res0.text).not.toContain('PARADA')
+  })
+
   test('--finish com sessão legacy → SbError exit 1', async () => {
     const w = world()
     const e = await catching(() => runMigrate(rig(w.sb).ctx, { finish: true }, { install: installFor(w.sb) }))

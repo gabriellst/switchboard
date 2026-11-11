@@ -316,6 +316,19 @@ export function renderFindings(findings: Finding[], fixes?: FixAction[]): string
 
 // ------------------------------------------------------------------------------------------------------- migrate
 
+/**
+ * O aviso das sessões vivas: o `watch` as PARA (`claude stop`) quando ficam livres, para reescrever o `--settings`; elas voltam
+ * nas contas novas quando o usuário as reabre. Turno em andamento ou trabalho agendado nunca é interrompido: a sessão espera.
+ */
+function liveSessionsNotice(n: number): string[] {
+  if (n === 0) return []
+  const que = n === 1 ? '1 sessão viva será PARADA pelo watch quando estiver livre' : `${n} sessões vivas serão PARADAS pelo watch quando estiverem livres`
+  return [
+    `${que} (até 3 por ciclo de 30 s), para trocar o settings dela(s) pelo do sb; reabra-${n === 1 ? 'a' : 'as'} depois e ${n === 1 ? 'ela volta' : 'elas voltam'} nas contas novas.`,
+    'Uma sessão no meio de um turno ou com trabalho agendado nunca é interrompida: espera ficar livre.',
+  ]
+}
+
 const shortPath = (home: string) => (p: string): string => (p === home || p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p)
 
 /** `sb migrate --simular`: tudo o que a migração faria, sem token (o plano nem o carrega). */
@@ -335,8 +348,10 @@ export function renderMigrationPlan(plan: MigrationPlan, home: string): string {
   lines.push('', 'Sessões em segundo plano do claude-conta:')
   if (plan.rewrites.length === 0) lines.push('  nenhuma')
   for (const r of plan.rewrites) {
-    lines.push(`  ${r.jobId}  ${r.when === 'now' ? 'parada: reescrita agora' : 'viva: vai para a fila e o watch reescreve quando estiver livre'}  ${short(r.from)} → ${short(r.to)}`)
+    lines.push(`  ${r.jobId}  ${r.when === 'now' ? 'parada: reescrita agora' : 'viva: vai para a fila; o watch a PARA quando estiver livre'}  ${short(r.from)} → ${short(r.to)}`)
   }
+  const live = liveSessionsNotice(plan.rewrites.filter((r) => r.when === 'when-free').length)
+  if (live.length > 0) lines.push('', ...live.map((l) => `⚠ ${l}`))
   lines.push('', plan.stopVigia === null ? 'Vigia do claude-conta: não está rodando' : `Vigia do claude-conta: pid ${plan.stopVigia} (será parado)`)
   lines.push(plan.zshrc === null ? '~/.zshrc: sem linha do claude-conta; o sb install acrescenta a do sb' : `~/.zshrc: a linha do claude-conta sai e entra a do sb (cópia do arquivo no backup)`)
   lines.push(`/conta: ${short(plan.command.remove)} vai para o backup; /sb em ${short(plan.command.add)}`)
@@ -349,7 +364,7 @@ export function renderMigrationPlan(plan: MigrationPlan, home: string): string {
 
 const REWRITE_TEXT: Record<MigrationResult['rewrites'][number]['result'], string> = {
   rewritten: 'reescrita',
-  queued: 'na fila (o watch reescreve quando ela estiver livre)',
+  queued: 'viva, na fila (o watch a PARA quando estiver livre)',
   unchanged: 'já era do sb',
   gone: 'sumiu da lista do claude',
   failed: 'não reescrita',
@@ -363,6 +378,8 @@ export function renderMigration(r: MigrationResult, home: string): string {
   lines.push(r.muxes.length > 0 ? `Muxes criados: ${r.muxes.join(', ')}` : 'Muxes criados: nenhum novo')
   for (const g of r.likelyDuplicates) lines.push(`⚠ ${g.join(' e ')}: parecem a mesma conta (mesmo token ou mesmo uso medido)`)
   for (const w of r.rewrites) lines.push(`sessão ${w.jobId}: ${REWRITE_TEXT[w.result]}${w.message ? ` (${w.message})` : ''}`)
+  const live = liveSessionsNotice(r.rewrites.filter((w) => w.result === 'queued').length)
+  if (live.length > 0) lines.push(...live.map((l) => `⚠ ${l}`))
   lines.push(r.vigia === 'stopped' ? 'Vigia do claude-conta: parado' : r.vigia === 'failed' ? 'Vigia do claude-conta: NÃO consegui parar' : 'Vigia do claude-conta: não estava rodando')
   lines.push(r.zshrc === 'replaced' ? '~/.zshrc: linha do claude-conta trocada pela do sb (abra um terminal novo para valer)' : '~/.zshrc: sem linha do claude-conta para trocar')
   lines.push(r.command === 'moved' ? '/conta foi para o backup; use /sb' : '/conta: já não estava lá; use /sb')

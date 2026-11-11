@@ -27,8 +27,10 @@ import { fingerprint, measureAll } from './usage.js'
 //     exceção autorizada (cópia privada, 700/600). Mensagens de erro de arquivo de token são FIXAS: o texto de um `JSON.parse` que
 //     falha pode citar um trecho do arquivo;
 //   - `--simular` (e `planMigration`) não escreve NADA: nem diretório de estado, nem lock, nem log, nem medição;
-//   - nunca pára uma sessão: as paradas são reescritas na hora, as vivas vão para `runtime.pending` (`reason: 'migrate'`) e o
-//     `watch` as aplica quando estiverem livres; nunca toca o keychain;
+//   - o `migrate` em si não pára nenhuma sessão: as paradas são reescritas na hora e as vivas vão para `runtime.pending`
+//     (`reason: 'migrate'`). Quem as PARA é o `watch` (`claude stop`, três por ciclo) quando cada uma estiver livre, para
+//     reescrever o `--settings`; a sessão volta nas contas novas quando o usuário a reabre. Turno em andamento ou trabalho
+//     agendado nunca é interrompido (a sessão espera na fila). A saída tem de dizer isso e quantas são; nunca toca o keychain;
 //   - cada passo é aditivo ou idempotente e as recusas vêm antes da primeira escrita: uma falha no meio deixa o legado inteiro e
 //     usável, e rodar de novo termina o serviço sem duplicar nada.
 // Uma config do sb que já existe NUNCA é sobrescrita: o plano mescla (só entra conta/mux/default que falta) e o aplicar grava

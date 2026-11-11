@@ -370,7 +370,9 @@ config inválida (exit 2); `claude agents` ilegível (exit 4).
 `contas`, `contas-fixas`, `commands/conta.md`, `~/.zshrc`; diretórios 700, arquivos 600); (2) tokens
 para `tokens/` (nunca sobrescreve um existente); (3) só as edições que faltam na config do usuário
 (contas, muxes, `default`); (4) links dos muxes novos; (5) sessões: paradas reescritas, vivas na fila
-`migrate`; (6) `kill` do vigia do `claude-conta`, se o pid ainda é de um `_vigiar`; (7) a linha
+`migrate` (o `watch` PARA cada uma, com `claude stop`, quando ela ficar livre; ela volta nas contas novas
+quando o usuário a reabre; turno em andamento ou trabalho agendado nunca é interrompido; o `--simular` e a
+saída do aplicar dizem quantas são); (6) `kill` do vigia do `claude-conta`, se o pid ainda é de um `_vigiar`; (7) a linha
 `# claude-conta` do `~/.zshrc` vira a do `sb`; (8) `conta.md` sai (a cópia está no backup); (9) `sb
 install`; (10) medição para achar duplicatas. Cada passo é aditivo ou idempotente.
 

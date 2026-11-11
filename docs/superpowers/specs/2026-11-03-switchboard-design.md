@@ -382,7 +382,8 @@ Com `--simular` primeiro, mostrando tudo o que faria:
    view `claude agents --cwd` aberta (conta = a ativa atual).
 3. Reescrever `respawnFlags` das sessões em segundo plano **paradas**: `~/.claude/contas/ativa.json`
    → `mux/<mux pela pasta>.json`; `~/.claude/contas-fixas/<c>.json` → `pins/<c>.json`. Vivas: na
-   próxima vez que estiverem livres (via `watch`), com o mesmo cuidado de F8.
+   próxima vez que estiverem livres (via `watch`), com o mesmo cuidado de F8 — o `watch` **para** (`claude stop`)
+   cada uma para reescrever; ela volta nas contas novas quando o usuário a reabre. A saída diz isso e quantas são.
 4. Parar o vigia do `claude-conta`; trocar a linha do wrapper no `~/.zshrc`; trocar `/conta` por `/sb`.
 5. Não apagar nada do `claude-conta`: mover para um backup e dizer onde está.
 6. Imprimir os comandos para reabrir cada aba do cmux com `sb agents <mux>`.
