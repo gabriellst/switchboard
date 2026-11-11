@@ -115,6 +115,13 @@ const BEFORE_SUBCOMMAND: Array<{ name: string; argv: string[]; flag: string }> =
   { name: 'sb --clear swap', argv: ['--clear', 'swap', 'bk'], flag: '--clear' },
   { name: 'sb -x swap', argv: ['-x', 'swap', 'bk'], flag: '-x' },
   { name: 'sb --bogus run', argv: ['--bogus', 'run', 'bk', '--', '-p', 'x'], flag: '--bogus' },
+  // o citty trata `-` (sozinho) como opção ao procurar o subcomando: pula-o e as opções que vêm depois
+  { name: 'sb - --bogus doctor', argv: ['-', '--bogus', 'doctor'], flag: '"-"' },
+  { name: 'sb - --simulate migrate', argv: ['-', '--simulate', 'migrate'], flag: '"-"' },
+  { name: 'sb - --dry-run install', argv: ['-', '--dry-run', 'install'], flag: '"-"' },
+  { name: 'sb mux - --bogus set bk --pool x', argv: ['mux', '-', '--bogus', 'set', 'bk', '--pool', 'gabriel'], flag: '"-"' },
+  { name: 'sb accounts - rm (só o `-`, sem outra opção)', argv: ['accounts', '-', 'rm', 'admin1', '--yes'], flag: '"-"' },
+  { name: 'sb - migrate (só o `-`)', argv: ['-', 'migrate'], flag: '"-"' },
   { name: 'sb --bogus=1 watch', argv: ['--bogus=1', 'watch', '--once'], flag: '--bogus' },
 ]
 
@@ -166,6 +173,13 @@ describe('opção antes do subcomando (raiz, mux, accounts): exit 3 e nenhum efe
     expect(sb.runSb(['--every', '30', '--json']).code).toBe(0)
     expect(sb.runSb(['usage', '--json']).code).toBe(0)
     expect(sb.runSb(['mux', 'set', 'bk', '--pool=gabriel,admin1']).code).toBe(0)
+  })
+
+  test('`-` sozinho continua valendo onde é argumento comum: depois do `--` do run e como posicional da folha', () => {
+    const sb = populatedSandbox()
+    expect(sb.runSb(['run', 'bk', '--', '-p', '-']).code).toBe(0)
+    expect(sb.calls()[0]!.argv).toEqual(expect.arrayContaining(['-p', '-']))
+    expect(sb.runSb(['which', '-']).code).not.toBe(EXIT.USAGE) // posicional (pasta "-"), não opção: o which decide
   })
 
   test('sb run <mux> -- … continua sendo passthrough (inclusive com opções do sb depois do `--`)', () => {

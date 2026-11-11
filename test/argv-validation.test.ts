@@ -29,11 +29,20 @@ describe('validateArgv (árvore real: raiz → mux/accounts → folha)', () => {
       [['mux', '--json', 'add'], '--json'],
       [['-x', 'swap', 'bk'], '-x'],
       [['--bogus=1', 'watch'], '--bogus'],
+      [['-', '--bogus', 'doctor'], '"-"'], // o citty trata `-` como opção ao procurar o nome e pula o que vem depois
+      [['mux', '-', '--bogus', 'set'], '"-"'],
+      [['-', 'migrate'], '"-"'],
+      [['accounts', '-', 'rm'], '"-"'],
     ] as Array<[string[], string]>) {
       const v = await verdict(argv)
       expect(v.startsWith(`${EXIT.USAGE}:`)).toBe(true)
       expect(v).toContain(flag)
     }
+  })
+
+  test('nome vazio (`\'\'`): o citty roda o padrão com o argv inteiro, então as opções valem como no padrão', async () => {
+    expect((await verdict(['', '--bogus', 'doctor'])).startsWith(`${EXIT.USAGE}:`)).toBe(true)
+    expect((await verdict(['', '--json'])).startsWith('ok')).toBe(true)
   })
 
   test('recusa a opção desconhecida depois do nome (folha), com o `--` como limite', async () => {
@@ -48,6 +57,7 @@ describe('validateArgv (árvore real: raiz → mux/accounts → folha)', () => {
       [], ['--json'], ['--watch', '--every', '30'], ['--every=30'], ['--every', '-5'], ['usage', '--json'], ['accounts'], ['accounts', '--json'], ['accounts', 'list', '--json'],
       ['accounts', 'rm', 'a', '--yes'], ['mux'], ['mux', '--json'], ['mux', 'list', '--json'], ['mux', 'add', 'x', '--root', '~/x', '--account', 'a'], ['mux', 'set', 'bk', '--pool=a,b', '--no-default'],
       ['--help'], ['-h'], ['--version'], ['-v'], ['mux', '--help'], ['--bogus', '--help'], ['swap', 'bk', '--clear', '--json'], ['which', '/tmp/a b'], ['run', 'bk', '--', '-p', 'x'],
+      ['run', 'bk', '--', '-'], ['which', '-'], ['-'], ['mux', '-'], // `-` sem subcomando adiante ou depois do nome: argumento comum
       ['nao-existe'], // subcomando desconhecido: erro do citty (exit 1), não daqui
     ]) {
       expect([argv.join(' '), await verdict(argv)]).toEqual([argv.join(' '), 'ok'])

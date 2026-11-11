@@ -15,7 +15,7 @@ const isHelp = (a: string): boolean => a === '--help' || a === '-h'
  * o `guarded` nunca os vê. Esta função confere o argv INTEIRO uma vez, antes de o citty despachar qualquer coisa, descendo a árvore
  * nível por nível:
  *
- * - com um subcomando adiante, QUALQUER opção antes do nome é recusada (exit 3): a que ninguém declara é "desconhecida"; a que o
+ * - com um subcomando adiante, QUALQUER opção (e o `-` sozinho, que o citty também toma por opção) antes do nome é recusada (exit 3): a que ninguém declara é "desconhecida"; a que o
  *   pai declara (`--json`, `--every`, que só valem sem subcomando, para o painel/listagem padrão) seria descartada pelo citty, então
  *   também é recusada, mandando pô-la depois do subcomando. Nada é realocado;
  * - sem subcomando adiante (o pai roda o padrão, `sb` = painel, `sb mux` = list), as opções têm de ser as declaradas no nível;
@@ -45,7 +45,8 @@ export async function validateArgv(root: CmdLike, rawArgs: readonly string[]): P
     for (let i = 0; i < rest.length; i++) {
       const a = rest[i]!
       if (a === '--') break
-      if (a.startsWith('-') && a !== '-') {
+      // `startsWith('-')` sem exceção: é o critério do citty, e ele trata o `-` sozinho como opção (pula-o e as opções seguintes)
+      if (a.startsWith('-')) {
         firstFlag ??= a
         const m = matchFlag(sets, a)
         if (m.ok && m.takesValue && !a.includes('=')) i++
@@ -54,11 +55,19 @@ export async function validateArgv(root: CmdLike, rawArgs: readonly string[]): P
       nameAt = i
       break
     }
-    if (nameAt === -1) {
+    // nome vazio (`''`): o citty o toma por "sem nome" e roda o subcomando padrão com o argv inteiro
+    if (nameAt === -1 || rest[nameAt] === '') {
       assertKnownFlags(def, rest) // sem subcomando: o padrão do pai roda com estas opções
       return
     }
     const name = rest[nameAt]!
+    if (firstFlag === '-') {
+      throw new SbError(
+        `o argumento "-" antes do subcomando "${name}" não é aceito (o citty o trata como opção e descartaria o que vem depois)`,
+        EXIT.USAGE,
+        `  nada foi feito; tire-o, ou ponha-o depois do subcomando`,
+      )
+    }
     if (firstFlag !== undefined) {
       const flag = firstFlag.split('=')[0]!
       if (!matchFlag(sets, firstFlag).ok) throw unknownFlag(firstFlag)
