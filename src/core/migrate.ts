@@ -392,13 +392,12 @@ export async function planMigration(ctx: Ctx): Promise<MigrationPlan> {
 
   // sessões: o destino de cada uma sai dos flags dela (a mesma função que o `watch` usa ao aplicar a fila)
   const rewrites: MigrationPlan['rewrites'] = []
-  const { sessions } = loadSessionsWithWarnings(ctx)
-  for (const s of [...sessions].sort((a, b) => (a.agent.id < b.agent.id ? -1 : 1))) {
-    if (s.job === null) {
-      warnings.push(`sessão ${s.agent.id}: state.json ilegível; não dá saber se é do claude-conta (o --finish recusa enquanto ela existir)`)
-      continue
-    }
-    if (s.owner.kind !== 'legacy') continue
+  const loaded = loadSessionsWithWarnings(ctx)
+  for (const id of unreadableIds(loaded.warnings)) {
+    warnings.push(`sessão ${id}: state.json ilegível; não dá para saber se é do claude-conta (o --finish recusa enquanto ela existir)`)
+  }
+  for (const s of [...loaded.sessions].sort((a, b) => (a.agent.id < b.agent.id ? -1 : 1))) {
+    if (s.job === null || s.owner.kind !== 'legacy') continue
     const src = legacySource(s.job.respawnFlags, paths)
     try {
       const t = migrationTarget(paths, config, s)
@@ -661,15 +660,23 @@ export interface FinishResult {
 }
 
 /**
+ * Ids das sessões cujo `state.json` EXISTE mas não se lê (o adaptador avisa `sessão <id>: …`). Sem `state.json` nenhum a sessão
+ * também tem `job: null`, mas ela não tem `respawnFlags` e portanto não aponta para o claude-conta: isso não bloqueia nada.
+ */
+function unreadableIds(warnings: string[]): string[] {
+  return warnings.map((w) => /^sessão ([0-9a-f]{8})/.exec(w)?.[1]).filter((id): id is string => id !== undefined)
+}
+
+/**
  * Quem ainda aponta para `~/.claude/contas*`: sessão em segundo plano com `--settings` legado, sessão cujo `state.json` não se
  * lê (não dá para provar que não é legado), pedido `migrate` na fila e view do `claude agents` com o settings do claude-conta.
  */
 function legacyBlockers(ctx: Ctx): string[] {
   const lines: string[] = []
-  const { sessions } = loadSessionsWithWarnings(ctx)
+  const { sessions, warnings } = loadSessionsWithWarnings(ctx)
   const legacy = sessions.filter((s) => s.owner.kind === 'legacy').map((s) => s.agent.id)
   if (legacy.length > 0) lines.push(`sessões ainda no settings do claude-conta: ${legacy.join(', ')}`)
-  const unreadable = sessions.filter((s) => s.job === null).map((s) => s.agent.id)
+  const unreadable = unreadableIds(warnings)
   if (unreadable.length > 0) lines.push(`sessões com state.json ilegível (não dá para provar que não são do claude-conta; \`claude rm\` as que sobraram): ${unreadable.join(', ')}`)
   const queued = readRuntime(ctx.paths).pending.filter((i) => i.reason === 'migrate').map((i) => i.jobId)
   if (queued.length > 0) lines.push(`sessões vivas na fila da migração (o watch as reescreve quando ficarem livres): ${queued.join(', ')}`)

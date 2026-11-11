@@ -97,6 +97,7 @@ function world(over: { tokens?: Partial<Record<keyof typeof TOKENS, string>>; no
   writeFileSync(contaMd(sb), CONTA_MD)
   writeFileSync(join(home, '.zshrc'), `export A=1\n${OLD_LINE}\nalias x=y\n`)
   for (const d of ['bk', 'bk/sub', 'berzerk']) mkdirSync(join(home, 'p', d), { recursive: true })
+  mkdirSync(join(home, 'Library', 'Caches'), { recursive: true }) // onde o bun do claude falso cria o cache; o resto de Library (LaunchAgents) o --simular não pode tocar
   if (!over.noSessions) {
     const ativa = join(contas, 'ativa.json')
     const bk = join(home, 'p', 'bk')
@@ -167,7 +168,7 @@ function snapshot(root: string, skip: (path: string) => boolean = () => false): 
   return out
 }
 // o claude falso é um script bun: rodá-lo com HOME no sandbox cria o cache do bun em home/Library (ruído do teste, não do sb)
-const skipFakeClaude = (path: string): boolean => path.includes('/fake-claude') || path.endsWith('/home/Library') || path.includes('/home/Library/')
+const skipFakeClaude = (path: string): boolean => path.includes('/fake-claude') || path.includes('/home/Library/Caches/bun')
 
 /** Arquivos do sandbox que contêm algo parecido com token, fora do que PODE tê-lo: `tokens/` e as cópias de `contas*`. */
 function leaks(sb: Sandbox): string[] {
@@ -935,6 +936,14 @@ describe('finishMigration', () => {
     const e = await catching(() => finishMigration(rig(w.sb).ctx))
     expect(e.exit).toBe(EXIT.CHECK_FAILED)
     expect(`${e.message}\n${e.detail ?? ''}`).toContain('a1b2c3d7')
+  })
+
+  test('sessão SEM state.json (parada, nunca teve flags) não bloqueia o --finish', async () => {
+    const w = world({ noSessions: true })
+    addSession(w.sb, 'a1b2c3d8', [], 'stopped') // grava o state.json…
+    rmSync(stateFile(w.sb, 'a1b2c3d8')) // …e some com ele
+    const out = await finishMigration(rig(w.sb).ctx, { simular: true })
+    expect(out.moved.length).toBe(2)
   })
 
   test('depois das reescritas move contas/ e contas-fixas/ para o backup (sem apagar), com --simular não move', async () => {
