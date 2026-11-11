@@ -29,6 +29,8 @@ function mk(u5: number, u7: number, o: MkOpts = {}): Measurement {
 }
 const err = (error: 'dead-token' | 'rate-limited' | 'network' | 'unexpected' | 'no-token'): Measurement =>
   ({ ok: false, error, measuredAt: NOW }) as Measurement
+/** 429 sem os cabeçalhos unified; `streak` = quantas sondas seguidas vieram assim (1ª = ainda não confirma esgotamento) */
+const limited = (streak?: number): Measurement => ({ ok: false, error: 'rate-limited', httpStatus: 429, measuredAt: NOW, ...(streak !== undefined && { streak }) }) as Measurement
 
 const bk: MuxConfig = { root: '/r', account: 'gabriel', accounts: ['gabriel', 'admin1', 'cliente-x'], pool: ['gabriel', 'admin1'] }
 const swapOf = (returnOnReset = true): SwapConfig => ({ auto: true, threshold: TH, returnOnReset, probeEvery: '5m' })
@@ -61,9 +63,17 @@ describe('availability', () => {
     expect(av(err('no-token'))).toBe('exhausted')
     expect(av(err('dead-token'))).toBe('exhausted')
   })
-  test('rate-limited → exhausted, mesmo voltando (sem histerese)', () => {
-    expect(av(err('rate-limited'))).toBe('exhausted')
-    expect(av(err('rate-limited'), true)).toBe('exhausted')
+  test('rate-limited (429 sem cabeçalhos) só esgota na 2ª sonda seguida, mesmo voltando (sem histerese)', () => {
+    for (const m of [limited(2), limited(3), limited(10)]) {
+      expect(av(m)).toBe('exhausted')
+      expect(av(m, true)).toBe('exhausted')
+    }
+  })
+  test('o 1º rate-limited seguido é unknown (um 429 sem cabeçalhos é mais provavelmente espúrio); sem `streak` (registro antigo) conta como o 1º', () => {
+    for (const m of [limited(1), limited(), err('rate-limited')]) {
+      expect(av(m)).toBe('unknown')
+      expect(av(m, true)).toBe('unknown')
+    }
   })
   test('network e unexpected → unknown', () => {
     expect(av(err('network'))).toBe('unknown')
@@ -244,11 +254,22 @@ describe('desiredAccount', () => {
   })
 
   describe('rate-limited / erros na preferida', () => {
-    test('rate-limited na preferida → troca para o pool', () => {
-      expect(eval_({ gabriel: err('rate-limited'), admin1: mk(0.2, 0.3) })).toMatchObject({ desired: 'admin1', reason: 'pool' })
+    test('rate-limited na preferida (2ª seguida) → troca para o pool', () => {
+      expect(eval_({ gabriel: limited(2), admin1: mk(0.2, 0.3) })).toMatchObject({ desired: 'admin1', reason: 'pool' })
+    })
+    test('o 1º rate-limited na preferida NÃO troca (unknown): nem sai dela, nem volta a ela de uma reserva só por isso', () => {
+      expect(eval_({ gabriel: limited(1), admin1: mk(0.2, 0.3) })).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
+      expect(eval_({ gabriel: limited(1), admin1: mk(0.2, 0.3) }, { current: 'admin1' })).toMatchObject({ desired: 'admin1', reason: 'sticky' })
+      expect(eval_({ gabriel: limited(1), admin1: mk(0.2, 0.3) }, { current: 'admin1' })).toMatchObject({ desired: 'admin1' })
+    })
+    test('o 1º rate-limited na atual (reserva) NÃO a tira de lá; o 2º tira', () => {
+      const mux = { pool: ['gabriel', 'admin1', 'outra'], accounts: ['gabriel', 'admin1', 'outra'] }
+      const at = (m: Measurement) => eval_({ gabriel: mk(0.95, 0.1), admin1: m, outra: mk(0.1, 0.1) }, { mux, current: 'admin1' })
+      expect(at(limited(1))).toMatchObject({ desired: 'admin1', reason: 'pool' })
+      expect(at(limited(2))).toMatchObject({ desired: 'outra', reason: 'pool' })
     })
     test('rate-limited na preferida → não volta enquanto não houver medição ok', () => {
-      expect(eval_({ gabriel: err('rate-limited'), admin1: mk(0.2, 0.3) }, { current: 'admin1' })).toMatchObject({ desired: 'admin1', reason: 'pool' })
+      expect(eval_({ gabriel: limited(2), admin1: mk(0.2, 0.3) }, { current: 'admin1' })).toMatchObject({ desired: 'admin1', reason: 'pool' })
       expect(eval_({ gabriel: mk(0.2, 0.2), admin1: mk(0.2, 0.3) }, { current: 'admin1' })).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
     })
     // FLIPPED (revisão): na reserva válida, a preferida unknown não puxa de volta
@@ -263,7 +284,7 @@ describe('desiredAccount', () => {
     })
     test('rate-limited na preferida: só volta com medição ok abaixo do limiar − 0.10', () => {
       const at = (g: Measurement) => eval_({ gabriel: g, admin1: mk(0.2, 0.3) }, { current: 'admin1' })
-      expect(at(err('rate-limited'))).toMatchObject({ desired: 'admin1', reason: 'pool' })
+      expect(at(limited(2))).toMatchObject({ desired: 'admin1', reason: 'pool' })
       expect(at(mk(0.85, 0.1))).toMatchObject({ desired: 'admin1', reason: 'pool' })
       expect(at(mk(0.79, 0.1))).toMatchObject({ desired: 'gabriel', reason: 'preferred' })
     })
@@ -427,7 +448,8 @@ describe('desiredAccount — ponto fixo (varredura aleatória com semente)', () 
     const ACCOUNTS = ['p', 'a', 'b', 'c', 'x'] as const
     const kinds = [
       () => undefined,
-      () => err('rate-limited'),
+      () => limited(2),
+      () => limited(1),
       () => err('dead-token'),
       () => err('network'),
       () => err('unexpected'),

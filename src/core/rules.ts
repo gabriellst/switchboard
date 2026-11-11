@@ -10,8 +10,10 @@ export type Availability = 'available' | 'exhausted' | 'unknown'
  * Disponibilidade de uma conta (puro: `nowMs` vem de fora).
  *
  * - sem medição → unknown; `no-token`/`dead-token` → exhausted;
- * - `rate-limited` → exhausted: um 429 da sonda é o sinal de conta esgotada. Não há reset conhecido,
- *   então vale até a próxima medição `ok`; a histerese não se aplica a ele;
+ * - `rate-limited` (429 SEM os cabeçalhos unified; com eles é uma medição normal): a 1ª sonda seguida é `unknown`
+ *   (uma conta realmente esgotada responde com os cabeçalhos; sem eles é mais provavelmente um 429 espúrio, e tratá-lo
+ *   como esgotada trocaria o mux de conta e de volta, duas rodadas de paradas); só a 2ª seguida (`streak ≥ 2`) é
+ *   exhausted. Não há reset conhecido, então vale até a próxima medição `ok`; a histerese não se aplica a ele;
  * - `network`/`unexpected` → unknown (falha nossa, não da conta);
  * - medição ok: janela esgotada se `utilization ≥ limite − margem` ou `status` não começa com
  *   `allowed` (`allowed_warning` não esgota). Janela esgotada só vale até o `resetsAt` dela
@@ -27,7 +29,8 @@ export function availability(
 ): Availability {
   if (m === undefined) return 'unknown'
   if (!m.ok) {
-    return m.error === 'no-token' || m.error === 'dead-token' || m.error === 'rate-limited' ? 'exhausted' : 'unknown'
+    if (m.error === 'rate-limited') return (m.streak ?? 1) >= 2 ? 'exhausted' : 'unknown'
+    return m.error === 'no-token' || m.error === 'dead-token' ? 'exhausted' : 'unknown'
   }
   const margin = opts.returning ? HYSTERESIS : 0
   const nowSec = nowMs / 1000

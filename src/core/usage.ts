@@ -11,6 +11,11 @@ import { loadSecret } from './tokens.js'
 export type Measurement = (ProbeResult | { ok: false; error: 'no-token' }) & {
   /** ms desde a época (`ctx.now()`); `resetsAt` das janelas é em segundos */
   measuredAt: number
+  /**
+   * Só em `rate-limited` (429 sem os cabeçalhos unified): quantas sondas seguidas vieram assim. A 1ª é provavelmente espúria
+   * (`unknown`); só a 2ª seguida esgota (ver `availability`). Ausente = 1 (registro de antes desta regra).
+   */
+  streak?: number
 }
 
 export interface UsageFile {
@@ -113,8 +118,11 @@ export async function measureAll(ctx: Ctx, cfg: Config, opts: { maxAgeMs: number
   const baseUrl = ctx.env.SWITCHBOARD_API_BASE ?? 'https://api.anthropic.com'
   const startedAt = ctx.now()
   const record = (account: string, m: Measurement): void => {
-    if (latest[account]) previous[account] = latest[account]
-    latest[account] = m
+    const before = latest[account]
+    if (before) previous[account] = before
+    // 429 sem cabeçalhos: conta as sondas SEGUIDAS dessa conta (qualquer outra medição no meio zera); só medição nova chega aqui
+    const streak = !m.ok && m.error === 'rate-limited' ? (before !== undefined && !before.ok && before.error === 'rate-limited' ? (before.streak ?? 1) : 0) + 1 : undefined
+    latest[account] = streak === undefined ? m : { ...m, streak }
   }
 
   const byToken = new Map<string, string[]>() // só em memória

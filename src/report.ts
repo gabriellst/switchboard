@@ -46,7 +46,7 @@ function failureText(m: Measurement | undefined): string {
     case 'dead-token':
       return `token morto (${m.httpStatus ?? 401})`
     case 'rate-limited':
-      return `limite atingido (${m.httpStatus ?? 429})`
+      return (m.streak ?? 1) >= 2 ? `limite atingido (${m.httpStatus ?? 429})` : `${m.httpStatus ?? 429} sem cabeçalhos (a confirmar)`
     case 'network':
       return 'sem rede'
     case 'unexpected':

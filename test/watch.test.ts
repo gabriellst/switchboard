@@ -66,14 +66,15 @@ function world(): Sandbox {
   return sb
 }
 
-type U = number | { five: number; reset?: number } | 'rate-limited'
+type U = number | { five: number; reset?: number } | 'rate-limited' | 'rate-limited-first'
 
 /** Grava `usage.json`: `at` é o `measuredAt` (recente = nenhuma sonda no ciclo). */
 function setUsage(sb: Sandbox, util: Record<string, U>, at = NOW): void {
   const latest: Record<string, unknown> = {}
   for (const [a, u] of Object.entries(util)) {
-    if (u === 'rate-limited') {
-      latest[a] = { ok: false, error: 'rate-limited', httpStatus: 429, measuredAt: at }
+    if (u === 'rate-limited' || u === 'rate-limited-first') {
+      // 429 sem cabeçalhos: a 2ª sonda seguida (streak 2) esgota; a 1ª é unknown
+      latest[a] = { ok: false, error: 'rate-limited', httpStatus: 429, streak: u === 'rate-limited' ? 2 : 1, measuredAt: at }
       continue
     }
     const five = typeof u === 'number' ? u : u.five
@@ -181,6 +182,19 @@ describe('tick — medir e trocar', () => {
     expect(r2.evaluations[0]).toMatchObject({ desired: 'admin1' })
     expect(h.notes.filter((m) => m.includes('admin1'))).toHaveLength(1)
     expect(stops(sb)).toEqual([])
+  })
+
+  test('429 sem cabeçalhos: o 1º na conta atual não troca nada; o 2º seguido troca (e para as sessões livres uma vez só)', async () => {
+    const sb = world()
+    setUsage(sb, { gabriel: 'rate-limited-first', admin1: 0.2 })
+    const r1 = await tick(harness(sb).at(NOW), cfgOf(sb), fast)
+    expect(r1.swaps).toEqual([])
+    expect(bkLink(sb)).toBe('gabriel')
+    expect(stops(sb)).toEqual([])
+    setUsage(sb, { gabriel: 'rate-limited', admin1: 0.2 })
+    const r2 = await tick(harness(sb).at(NOW), cfgOf(sb), fast)
+    expect(r2.swaps[0]).toMatchObject({ from: 'gabriel', to: 'admin1' })
+    expect(bkLink(sb)).toBe('admin1')
   })
 
   test('reset da preferida passou → volta para ela', async () => {

@@ -73,8 +73,9 @@ São restrições, não suposições. O texto completo está no design (§3) e n
   dividem a medição), timeout de 15 s. O corpo da resposta nunca é lido. O token só vai no cabeçalho
   da requisição; nenhum resultado, erro ou log o carrega.
 - **Resultado**: `ok` (duas janelas `{utilization 0–1, resetsAt epoch s, status}`, mais `status` e
-  `resetsAt` gerais) ou erro: `dead-token` (401/403), `rate-limited` (429), `network`, `unexpected`,
-  e `no-token` (conta sem token; sem rede). Cabeçalhos incompletos mantêm o sinal HTTP.
+  `resetsAt` gerais) ou erro: `dead-token` (401/403), `rate-limited` (429 **sem** os cabeçalhos unified; com eles é uma medição normal), `network`, `unexpected`,
+  e `no-token` (conta sem token; sem rede). Cabeçalhos incompletos mantêm o sinal HTTP. O `usage.json` guarda em
+  `rate-limited` o campo `streak`: quantas sondas seguidas dessa conta vieram assim (qualquer outra medição zera).
 - **Cache**: `sb usage` reaproveita medições de até 60 s (`sb accounts` nunca mede: só lê o `usage.json`); o `watch` sonda quando a
   medição mais nova passa de `swap.probeEvery`, ou há conta nunca medida. `no-token` não fica preso
   no cache. Medição com idade negativa (relógio voltou) não vale como cache.
@@ -92,8 +93,11 @@ São restrições, não suposições. O texto completo está no design (§3) e n
 
 Pura (`nowMs` vem de fora). Resultado: `available`, `exhausted` ou `unknown`.
 
-- sem medição → `unknown`; `no-token`, `dead-token`, `rate-limited` → `exhausted` (o 429 não tem reset
-  conhecido: vale até a próxima medição `ok`); `network`, `unexpected` → `unknown` (falha nossa).
+- sem medição → `unknown`; `no-token`, `dead-token` → `exhausted`; `rate-limited` → `unknown` na **1ª** sonda
+  seguida (`streak` 1, ou ausente) e `exhausted` a partir da **2ª** (`streak ≥ 2`; o 429 não tem reset
+  conhecido: vale até a próxima medição `ok`). Uma conta realmente esgotada responde com os cabeçalhos (caminho
+  normal); um 429 sem eles é mais provavelmente espúrio, e tratá-lo como esgotado trocaria o mux de conta e de
+  volta (duas rodadas de paradas). `network`, `unexpected` → `unknown` (falha nossa).
 - medição `ok`: uma janela **bloqueia** se `utilization ≥ limite − margem` **ou** o `status` dela não
   começa com `allowed` (`allowed_warning` não esgota), e **só até o `resetsAt` dela**. Passado o reset,
   a conta volta a valer mesmo sem medição nova. O `status` geral `rejected` com `resetsAt` futuro

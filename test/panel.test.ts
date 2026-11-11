@@ -118,7 +118,8 @@ describe('renderPanel', () => {
       accounts: [
         { name: 'morta', measurement: { ok: false, error: 'dead-token', httpStatus: 401, measuredAt: NOW }, muxes: [{ mux: 'bk', role: 'preferred', position: 1 }] },
         { name: 'solta', measurement: { ok: false, error: 'no-token', measuredAt: NOW }, muxes: [] },
-        { name: 'cheia', measurement: { ok: false, error: 'rate-limited', httpStatus: 429, measuredAt: NOW }, muxes: [] },
+        { name: 'cheia', measurement: { ok: false, error: 'rate-limited', httpStatus: 429, streak: 2, measuredAt: NOW }, muxes: [] },
+        { name: 'talvez', measurement: { ok: false, error: 'rate-limited', httpStatus: 429, streak: 1, measuredAt: NOW }, muxes: [] },
         { name: 'offline', measurement: { ok: false, error: 'network', measuredAt: NOW }, muxes: [] },
         { name: 'nova', muxes: [] },
       ],
@@ -127,6 +128,7 @@ describe('renderPanel', () => {
     expect(out).toContain('token morto (401)')
     expect(out).toContain('sem token')
     expect(out).toContain('limite atingido (429)')
+    expect(out).toContain('429 sem cabeçalhos (a confirmar)')
     expect(out).toContain('sem rede')
     expect(out).toContain('ainda sem medição')
     expect(out).toMatch(/morta {5}token morto \(401\) +bk \(preferida\)/) // os muxes continuam na coluna deles

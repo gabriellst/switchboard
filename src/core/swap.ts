@@ -329,7 +329,7 @@ export function manualSwap(
     if (pool.length === 0) throw usageError(`o mux "${mux}" não tem pool: informe a conta por extenso (\`sb swap ${mux} <conta>\`)`)
     const cur = needCurrent()
     // a preferida (e, pelo grupo, as cópias dela) conta como esgotada: a pergunta é "para onde, se não for ela?"
-    const asExhausted: Measurement = { ok: false, error: 'rate-limited', measuredAt: now }
+    const asExhausted: Measurement = { ok: false, error: 'rate-limited', streak: 2, measuredAt: now } // streak 2: exhausted de verdade
     const patched = { ...usage, latest: { ...usage.latest, [m.account]: asExhausted } }
     const ev = desiredAccount({ name: mux, mux: m, current: cur, usage: patched, swap: cfg.swap, nowMs: now })
     if (ev.reason === 'none-available' || ev.reason === 'preferred-outside-pool' || ev.desired === m.account) {

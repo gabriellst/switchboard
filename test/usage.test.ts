@@ -18,6 +18,8 @@ interface Reply {
   seven?: number
   reset5?: number
   reset7?: number
+  /** responde sem nenhum cabeçalho unified (a sonda lê `rate-limited` quando o status é 429) */
+  headerless?: boolean
 }
 
 function headersOf(r: Reply): Record<string, string> {
@@ -40,7 +42,7 @@ function fakeFetch(byToken: Record<string, Reply>): { fetch: FetchLike; calls: {
     const token = (init.headers.authorization ?? '').replace('Bearer ', '')
     calls.push({ url, token })
     const reply = byToken[token] ?? {}
-    const h = reply.status === 401 ? {} : headersOf(reply)
+    const h = reply.status === 401 || reply.headerless ? {} : headersOf(reply)
     return { status: reply.status ?? 200, headers: { get: (n) => h[n.toLowerCase()] ?? null } }
   }
   return { fetch, calls }
@@ -115,6 +117,62 @@ describe('measureAll', () => {
     expect(api.calls).toHaveLength(2)
     expect(v.latest.admin1!.measuredAt).toBe(T0 + 60_000)
     expect(v.previous.admin1!.measuredAt).toBe(T0)
+  })
+
+  describe('429 sem cabeçalhos (rate-limited): quantas sondas seguidas', () => {
+    const cfg = cfgOf(['admin1'])
+    const run = async (n: number, replyFor: (i: number) => Reply): Promise<UsageFile[]> => {
+      sb = sandbox()
+      sb.addToken('admin1')
+      const out: UsageFile[] = []
+      for (let i = 0; i < n; i++) {
+        const api = fakeFetch({ [FAKE_TOKEN]: replyFor(i) })
+        out.push(await measureAll(sb.ctx({ fetch: api.fetch, now: () => T0 + i * 60_000 }), cfg, { maxAgeMs: 0 }))
+      }
+      return out
+    }
+    const streakOf = (u: UsageFile): number | undefined => (u.latest.admin1 as { streak?: number }).streak
+
+    test('1ª → streak 1; 2ª seguida → 2; 3ª → 3; gravado em usage.json, sem token', async () => {
+      const us = await run(3, () => ({ status: 429, headerless: true }))
+      expect(us.map(streakOf)).toEqual([1, 2, 3])
+      expect(us[2]!.latest.admin1).toMatchObject({ ok: false, error: 'rate-limited', httpStatus: 429, streak: 3 })
+      const raw = readFileSync(usageFile(sb.paths), 'utf8')
+      expect(JSON.parse(raw).latest.admin1.streak).toBe(3)
+      expect(raw).not.toMatch(/sk-ant-/)
+      expect(readUsage(sb.paths).latest.admin1).toMatchObject({ streak: 3 })
+    })
+
+    test('uma sonda boa (ou outro erro) no meio zera a sequência', async () => {
+      const us = await run(4, (i) => (i === 1 ? {} : i === 2 ? { status: 500, headerless: true } : { status: 429, headerless: true }))
+      expect(us.map(streakOf)).toEqual([1, undefined, undefined, 1])
+    })
+
+    test('medição pulada pelo cache não conta como outra sonda', async () => {
+      sb = sandbox()
+      sb.addToken('admin1')
+      const api = fakeFetch({ [FAKE_TOKEN]: { status: 429, headerless: true } })
+      let now = T0
+      const ctx = sb.ctx({ fetch: api.fetch, now: () => now })
+      await measureAll(ctx, cfg, { maxAgeMs: 60_000 })
+      now = T0 + 10_000
+      const u = await measureAll(ctx, cfg, { maxAgeMs: 60_000 })
+      expect(api.calls).toHaveLength(1)
+      expect(streakOf(u)).toBe(1)
+    })
+
+    test('contas com o mesmo token têm a sequência de cada uma', async () => {
+      sb = sandbox()
+      sb.addToken('admin1')
+      sb.addToken('gabriel')
+      const both = cfgOf(['admin1', 'gabriel'])
+      for (let i = 0; i < 2; i++) {
+        const api = fakeFetch({ [FAKE_TOKEN]: { status: 429, headerless: true } })
+        const u = await measureAll(sb.ctx({ fetch: api.fetch, now: () => T0 + i * 60_000 }), both, { maxAgeMs: 0 })
+        expect(api.calls).toHaveLength(1)
+        expect([u.latest.admin1, u.latest.gabriel].map((m) => (m as { streak?: number }).streak)).toEqual([i + 1, i + 1])
+      }
+    })
   })
 
   test('relógio no futuro (medição com idade negativa) não vale como cache', async () => {

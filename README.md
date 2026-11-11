@@ -148,8 +148,10 @@ O `watch` roda um ciclo a cada 30 s: mede (a cada `probeEvery`), avalia cada mux
 troca o que precisa, reinicia as sessões antigas que ficaram livres e aplica a fila de pins.
 
 Uma conta **esgota** quando a janela de 5 h passa de `threshold.fiveHour` ou a semanal passa de
-`threshold.sevenDay`, ou a API devolve um status que não é `allowed`, ou 429, ou 401 (token morto) —
-até o reset daquela janela. O que o mux faz, na ordem:
+`threshold.sevenDay`, ou a API devolve um status que não é `allowed`, ou 401 (token morto) —
+até o reset daquela janela. Um 429 **sem** os cabeçalhos de uso é tratado como "não sei" na primeira vez
+(provavelmente espúrio: trocar e voltar custaria duas rodadas de paradas) e só esgota a conta na segunda
+sonda seguida; com os cabeçalhos, vale a medição normal. O que o mux faz, na ordem:
 
 1. **Preferida disponível**: o mux fica nela, ou volta para ela. Voltar de uma reserva exige que o
    reset tenha passado ou que o uso esteja pelo menos 10 pontos abaixo do limite nas duas janelas

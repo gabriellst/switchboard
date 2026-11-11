@@ -167,7 +167,7 @@ desejada(mux) =
 A ordem do `pool` é **do mux**: a mesma conta pode ser a 1ª na fila de um mux e a 2ª na de outro,
 e pode estar no pool de vários muxes ao mesmo tempo (cada mux anda na própria fila) **[minha escolha]**.
 
-- **Medição `unknown` (falha da nossa sonda: rede, 5xx) nunca, sozinha, faz o mux sair de uma conta que ainda é um lugar válido** [minha escolha, 03/11]: parar sessões por causa de um erro nosso custaria duas paradas por mux. `rate-limited` (429), token morto e esgotamento medido, sim, contam como esgotada.
+- **Medição `unknown` (falha da nossa sonda: rede, 5xx) nunca, sozinha, faz o mux sair de uma conta que ainda é um lugar válido** [minha escolha, 03/11]: parar sessões por causa de um erro nosso custaria duas paradas por mux. Token morto e esgotamento medido contam como esgotada; um 429 **sem** cabeçalhos só conta na 2ª sonda seguida (a 1ª é `unknown`; ver §14).
 - **Nunca ficar numa conta esgotada ou morta com a preferida utilizável**: a histerese do retorno segura uma reserva ainda boa, não uma esgotada [minha escolha, 03/11].
 - **Override manual esgotado** volta à regra normal ("segue a fila normal": a preferida volta a valer) [minha escolha, 03/11].
 - Isso dá o **retorno no reset** de graça: quando a preferida volta a estar disponível, ela é a
@@ -426,6 +426,7 @@ Registrados durante a execução; o `SPEC.md` descreve o comportamento final.
 - `sb accounts`, `sb attach`, `sb detach`, `sb login --attach` (já em §7, de 03/11 tarde).
 
 **Troca de conta**
+- 429 sem os cabeçalhos unified: a 1ª sonda seguida da conta é `unknown` (nunca causa troca); só a 2ª seguida esgota. Vale por conta e fica no `usage.json` (`streak`, sem token).
 - O algoritmo de §4 foi revisto na execução (reserva atual que ainda serve é mantida; `unknown` nunca empurra sozinho; override esgotado vira regra normal) e é o do `desiredAccount`; o `SPEC.md` §5.2 o descreve passo a passo.
 - Histerese do retorno: margem fixa de 0,10 abaixo do limite nas duas janelas (ou reset passado); não é configurável.
 - Cooldown de 5 minutos entre duas trocas automáticas do mesmo mux (salvo conta atual esgotada); no máximo 3 `claude stop` por ciclo do `watch`, com recuo quando uma parada falha. Não estavam no design.

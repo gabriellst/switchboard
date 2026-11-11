@@ -91,7 +91,7 @@ function setUsage(sb: Sandbox, util: Record<string, number | 'rate-limited'>): v
   for (const [a, u] of Object.entries(util)) {
     latest[a] =
       u === 'rate-limited'
-        ? { ok: false, error: 'rate-limited', httpStatus: 429, measuredAt: NOW }
+        ? { ok: false, error: 'rate-limited', httpStatus: 429, streak: 2, measuredAt: NOW }
         : {
             ok: true,
             fiveHour: { utilization: u, resetsAt: RESET_5H_S, status: 'allowed' },
