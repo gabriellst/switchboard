@@ -356,7 +356,10 @@ Limites conhecidos:
   qualquer efeito): `sb migrate --simulate`, `sb install --dry-run` ou `sb swap bk --cleer` não fazem
   nada. Valem `--opção`, `--opção=valor`, `--no-<opção booleana>` e `--help`/`-h`. Em `sb run`, o que vem
   depois do `--` é do `claude` e não é conferido; antes dele só o nome do mux, e `--settings`/
-  `--settings=` também é recusado. Só um subcomando desconhecido dá exit 1.
+  `--settings=` também é recusado. Vale também ANTES do subcomando: `sb --simulate migrate` ou
+  `sb mux --bogus set …` são recusados (o citty os descartaria em silêncio), e uma opção que só existe
+  no subcomando (ou a do painel, como `--json`) escrita antes do nome é recusada, não realocada: ponha-a
+  depois do subcomando. Só um subcomando desconhecido dá exit 1.
 - É de um usuário só e não está publicado. Usar várias assinaturas e alternar por limite é decisão
   sua; confira os termos do plano.
 

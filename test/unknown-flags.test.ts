@@ -100,6 +100,81 @@ describe('opção desconhecida: exit 3, nome da opção na mensagem e nenhum efe
   }
 })
 
+/** Opção ANTES do nome do subcomando: o citty a descarta em silêncio (a folha só recebe o que vem depois do nome). */
+const BEFORE_SUBCOMMAND: Array<{ name: string; argv: string[]; flag: string }> = [
+  { name: 'sb --bogus which', argv: ['--bogus', 'which', '/tmp'], flag: '--bogus' },
+  { name: 'sb mux --bogus set (muda a config se passar)', argv: ['mux', '--bogus', 'set', 'bk', '--pool', 'gabriel'], flag: '--bogus' },
+  { name: 'sb --simulate migrate', argv: ['--simulate', 'migrate'], flag: '--simulate' },
+  { name: 'sb --dry-run install', argv: ['--dry-run', 'install'], flag: '--dry-run' },
+  { name: 'sb accounts --bogus rm', argv: ['accounts', '--bogus', 'rm', 'admin1', '--yes'], flag: '--bogus' },
+  { name: 'sb --json migrate (opção do pai, que o filho nunca veria)', argv: ['--json', 'migrate'], flag: '--json' },
+  { name: 'sb --simular migrate (opção só da folha, antes do nome)', argv: ['--simular', 'migrate'], flag: '--simular' },
+  { name: 'sb --every 5 usage (opção do pai com valor)', argv: ['--every', '5', 'usage'], flag: '--every' },
+  { name: 'sb mux --json add (opção do pai mux)', argv: ['mux', '--json', 'add', 'x', '--root', '~/x', '--account', 'gabriel'], flag: '--json' },
+  { name: 'sb accounts --json rm', argv: ['accounts', '--json', 'rm', 'admin1', '--yes'], flag: '--json' },
+  { name: 'sb --clear swap', argv: ['--clear', 'swap', 'bk'], flag: '--clear' },
+  { name: 'sb -x swap', argv: ['-x', 'swap', 'bk'], flag: '-x' },
+  { name: 'sb --bogus run', argv: ['--bogus', 'run', 'bk', '--', '-p', 'x'], flag: '--bogus' },
+  { name: 'sb --bogus=1 watch', argv: ['--bogus=1', 'watch', '--once'], flag: '--bogus' },
+]
+
+describe('opção antes do subcomando (raiz, mux, accounts): exit 3 e nenhum efeito', () => {
+  for (const c of BEFORE_SUBCOMMAND) {
+    test(c.name, () => {
+      const sb = populatedSandbox()
+      addLegacy(sb)
+      const sh = shim(sb)
+      const before = snapshot(sb.dir) // inclui a config: `mux --bogus set` não pode alterá-la
+      const r = sb.runSb(c.argv, { env: sh.env })
+      expect(r.code).toBe(EXIT.USAGE)
+      expect(r.stderr).toContain(c.flag)
+      expect(r.stdout).toBe('')
+      expect(snapshot(sb.dir)).toEqual(before)
+      expect(sb.calls()).toEqual([])
+      expect(r.stdout + r.stderr).not.toMatch(/sk-ant-/)
+    })
+  }
+
+  test('sb mux --bogus set bk --pool …: a config fica byte a byte igual', () => {
+    const sb = populatedSandbox()
+    const before = readFileSync(sb.paths.configFile, 'utf8')
+    expect(sb.runSb(['mux', '--bogus', 'set', 'bk', '--pool', 'gabriel']).code).toBe(EXIT.USAGE)
+    expect(readFileSync(sb.paths.configFile, 'utf8')).toBe(before)
+  })
+
+  test('a mensagem de uma opção válida no pai mas fora do lugar manda pô-la depois do subcomando', () => {
+    const sb = populatedSandbox()
+    const r = sb.runSb(['--json', 'accounts'])
+    expect(r.code).toBe(EXIT.USAGE)
+    expect(r.stderr).toMatch(/depois d/)
+  })
+
+  test('formas legítimas continuam: --help, --version, mux --help, mux list --json, accounts, sb --json sem subcomando', () => {
+    const sb = populatedSandbox()
+    expect(sb.runSb(['--help']).code).toBe(0)
+    expect(sb.runSb(['-h']).code).toBe(0)
+    expect(sb.runSb(['--version']).stdout.trim()).toBe('0.1.0')
+    expect(sb.runSb(['mux', '--help']).code).toBe(0)
+    expect(sb.runSb(['--bogus', '--help']).code).toBe(0) // ajuda não tem efeito
+    expect(sb.runSb(['mux', 'list', '--json']).code).toBe(0)
+    expect(sb.runSb(['mux', '--json']).code).toBe(0) // pai sem subcomando = list
+    expect(sb.runSb(['accounts']).code).toBe(0)
+    expect(sb.runSb(['accounts', '--json']).code).toBe(0)
+    const bare = sb.runSb(['--json'])
+    expect(bare.code).toBe(0) // `sb` sem subcomando = painel, com as opções dele
+    expect(() => JSON.parse(bare.stdout)).not.toThrow()
+    expect(sb.runSb(['--every', '30', '--json']).code).toBe(0)
+    expect(sb.runSb(['usage', '--json']).code).toBe(0)
+    expect(sb.runSb(['mux', 'set', 'bk', '--pool=gabriel,admin1']).code).toBe(0)
+  })
+
+  test('sb run <mux> -- … continua sendo passthrough (inclusive com opções do sb depois do `--`)', () => {
+    const sb = populatedSandbox()
+    expect(sb.runSb(['run', 'bk', '--', '--bogus', '--json', '-p', 'oi']).code).toBe(0)
+    expect(sb.calls()[0]!.argv).toEqual(expect.arrayContaining(['--bogus', '--json', '-p', 'oi']))
+  })
+})
+
 describe('formas documentadas continuam valendo', () => {
   test('--flag, --flag=valor, --flag valor, --no-<booleana> e --json=false', () => {
     const sb = populatedSandbox()

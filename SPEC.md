@@ -318,7 +318,11 @@ Opção desconhecida é recusada em todo comando e subcomando (exit 3, mensagem 
 qualquer efeito): o citty as ignora em silêncio, então `guarded` (`src/commands/guard.ts`) compara os `rawArgs`
 com os `args` declarados (nome, camelCase/kebab-case, aliases, `--no-<booleana>`, `--opção=valor`, `--help`/`-h`)
 até o primeiro `--`. `--version` só vale sozinho (`sb --version`). Em `sb run` o que vem depois do `--` é do `claude`.
-Só um subcomando desconhecido falha com exit 1.
+O argv inteiro é conferido uma vez, antes de o citty despachar (`validateArgv`, `src/commands/argv.ts`, chamado em
+`src/cli.ts`), descendo raiz → `mux`/`accounts` → folha: com um subcomando adiante, qualquer opção antes do nome é
+recusada (a desconhecida, e também a que o pai declara, porque o citty só entrega à folha o que vem depois do nome);
+sem subcomando adiante valem as opções declaradas no nível (`sb --json` = painel, `sb mux --json` = list). `--help`/`-h`
+em qualquer lugar e `--version`/`-v` sozinhos ficam com o citty. Só um subcomando desconhecido falha com exit 1.
 
 ## 10. Exit codes
 

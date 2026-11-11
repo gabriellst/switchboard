@@ -37,7 +37,7 @@ const WAIT_URL_MS = 25_000
 const isExit = (n: number | null): n is ExitCode => n !== null && (Object.values(EXIT) as number[]).includes(n)
 
 /** Argv do `sb login` desanexado: as MESMAS opções de attach do pedido original. */
-function detachedArgv(a: LoginArgs): string[] {
+export function detachedArgv(a: LoginArgs): string[] {
   const argv = ['login', a.account, '--foreground']
   if (a.attach) {
     argv.push('--attach', a.attach.mux)
