@@ -22,6 +22,7 @@ const CASES: Array<[string[], number]> = [
   [['install', '--simular', '--json'], 0], // só calcula: nada gravado, launchctl não chamado
   [['doctor', '--json'], 0], // só lê; `ps` falso (SWITCHBOARD_PS): sem batimento do watch é só aviso
   [['doctor', '--fix', '--json'], 0], // nada a consertar no cenário saudável
+  [['migrate', '--simular', '--json'], 3], // sem ~/.claude/contas no sandbox: nada a migrar (recusa limpa)
   [['accounts', 'rm', 'admin1'], 3], // sem --yes: recusa
   [['login', 'x', '--terminal'], 3], // entrada vazia: cancela, nada gravado
   [['attach', 'nova', 'bk'], 1], // conta inexistente: login desanexado com o claude falso (sem token impresso) → falha, sem vazar

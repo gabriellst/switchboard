@@ -1,6 +1,7 @@
 import type { FixAction } from './core/doctor.js'
 import { ADOPT_QUEUED_NOTE, FIXABLE, type Finding } from './core/findings.js'
 import type { InstallResult } from './core/install.js'
+import type { FinishResult, MigrationPlan, MigrationResult } from './core/migrate.js'
 import type { AccountInfo, MuxMembership, PanelData } from './core/panel.js'
 import type { Measurement } from './core/usage.js'
 import type { TickReport } from './core/watch.js'
@@ -310,5 +311,76 @@ export function renderFindings(findings: Finding[], fixes?: FixAction[]): string
   const errors = findings.filter((f) => f.severity === 'error').length
   lines.push('', `${errors} erro(s) · ${findings.length - errors} aviso(s)`)
   if (fixes === undefined && findings.some((f) => FIXABLE.has(f.code) && !f.message.includes(ADOPT_QUEUED_NOTE))) lines.push('`sb doctor --fix` conserta o que dá (links, permissões, sessões sem settings)')
+  return `${lines.join('\n')}\n`
+}
+
+// ------------------------------------------------------------------------------------------------------- migrate
+
+const shortPath = (home: string) => (p: string): string => (p === home || p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p)
+
+/** `sb migrate --simular`: tudo o que a migração faria, sem token (o plano nem o carrega). */
+export function renderMigrationPlan(plan: MigrationPlan, home: string): string {
+  const short = shortPath(home)
+  const lines = ['Simulação: nada foi gravado e nenhum processo foi parado.', '']
+  if (plan.tokens.length > 0) {
+    lines.push('Contas a importar (para tokens/, modo 600):')
+    for (const t of plan.tokens) lines.push(`  ${t.account.padEnd(14)} ← ${short(t.from)}`)
+  } else lines.push('Contas a importar: nenhuma (já importadas, ou o claude-conta não tem conta com token)')
+  for (const g of plan.likelyDuplicates) lines.push(`  ⚠ ${g.join(' e ')}: mesmo token (provável duplicata; contam como uma conta no total do pool)`)
+  lines.push('', `Muxes (default: ${plan.config.default ?? '—'}):`)
+  for (const [name, m] of Object.entries(plan.config.mux)) {
+    const how = m.account === 'keychain' && m.pool.length === 0 ? 'keychain, nunca troca sozinho' : `conta ${m.account} · pool ${m.pool.join(', ') || '—'}`
+    lines.push(`  ${name.padEnd(14)} ${m.root}  (${how})`)
+  }
+  lines.push('', 'Sessões em segundo plano do claude-conta:')
+  if (plan.rewrites.length === 0) lines.push('  nenhuma')
+  for (const r of plan.rewrites) {
+    lines.push(`  ${r.jobId}  ${r.when === 'now' ? 'parada: reescrita agora' : 'viva: vai para a fila e o watch reescreve quando estiver livre'}  ${short(r.from)} → ${short(r.to)}`)
+  }
+  lines.push('', plan.stopVigia === null ? 'Vigia do claude-conta: não está rodando' : `Vigia do claude-conta: pid ${plan.stopVigia} (será parado)`)
+  lines.push(plan.zshrc === null ? '~/.zshrc: sem linha do claude-conta; o sb install acrescenta a do sb' : `~/.zshrc: a linha do claude-conta sai e entra a do sb (cópia do arquivo no backup)`)
+  lines.push(`/conta: ${short(plan.command.remove)} vai para o backup; /sb em ${short(plan.command.add)}`)
+  lines.push(`Backup (cópia de contas/, contas-fixas/, conta.md e zshrc): ${plan.backup}`)
+  lines.push('Nada do claude-conta é apagado; `sb migrate --finish` move ~/.claude/contas* para o backup quando nenhuma sessão apontar mais para lá.')
+  for (const w of plan.warnings) lines.push(`⚠ ${w}`)
+  if (plan.reopen.length > 0) lines.push('', 'Depois de aplicar, reabra cada aba do cmux:', ...plan.reopen.map((r) => `  ${r}`))
+  return `${lines.join('\n')}\n`
+}
+
+const REWRITE_TEXT: Record<MigrationResult['rewrites'][number]['result'], string> = {
+  rewritten: 'reescrita',
+  queued: 'na fila (o watch reescreve quando ela estiver livre)',
+  unchanged: 'já era do sb',
+  gone: 'sumiu da lista do claude',
+  failed: 'não reescrita',
+}
+
+/** `sb migrate`: o que foi feito, onde está o backup e os comandos para reabrir as abas. */
+export function renderMigration(r: MigrationResult, home: string): string {
+  const short = shortPath(home)
+  const lines = ['Migração aplicada.']
+  lines.push(r.tokens.length > 0 ? `Contas importadas: ${r.tokens.join(', ')}` : 'Contas importadas: nenhuma nova')
+  lines.push(r.muxes.length > 0 ? `Muxes criados: ${r.muxes.join(', ')}` : 'Muxes criados: nenhum novo')
+  for (const g of r.likelyDuplicates) lines.push(`⚠ ${g.join(' e ')}: parecem a mesma conta (mesmo token ou mesmo uso medido)`)
+  for (const w of r.rewrites) lines.push(`sessão ${w.jobId}: ${REWRITE_TEXT[w.result]}${w.message ? ` (${w.message})` : ''}`)
+  lines.push(r.vigia === 'stopped' ? 'Vigia do claude-conta: parado' : r.vigia === 'failed' ? 'Vigia do claude-conta: NÃO consegui parar' : 'Vigia do claude-conta: não estava rodando')
+  lines.push(r.zshrc === 'replaced' ? '~/.zshrc: linha do claude-conta trocada pela do sb (abra um terminal novo para valer)' : '~/.zshrc: sem linha do claude-conta para trocar')
+  lines.push(r.command === 'moved' ? '/conta foi para o backup; use /sb' : '/conta: já não estava lá; use /sb')
+  const l = r.install.launchd
+  lines.push(l.status === 'loaded' ? `launchd: watch carregado em ${l.domain}` : `launchd: não consegui carregar o watch em ${l.domain}${l.error ? `: ${l.error}` : ''} (rode \`sb install\`)`)
+  if (r.install.zshrc.status === 'different') lines.push(`⚠ ${short(r.install.zshrc.file)} tem outra linha "# switchboard"; troque por: ${r.install.zshrc.line}`)
+  lines.push(`Backup do claude-conta: ${r.backup}`)
+  for (const w of r.warnings) lines.push(`⚠ ${w}`)
+  if (r.reopen.length > 0) lines.push('', 'Reabra cada aba do cmux (feche o `claude agents` antigo antes):', ...r.reopen.map((x) => `  ${x}`))
+  lines.push('', 'Quando o `sb doctor` e as sessões estiverem em ordem: `sb migrate --finish` move ~/.claude/contas* para o backup.')
+  return `${lines.join('\n')}\n`
+}
+
+/** `sb migrate --finish`. */
+export function renderFinish(r: FinishResult, home: string): string {
+  const short = shortPath(home)
+  if (r.moved.length === 0) return 'Nada a mover: ~/.claude/contas e ~/.claude/contas-fixas já não existem.\n'
+  const lines = [r.simulated ? 'Simulação: nada foi movido. Seriam movidos para o backup:' : 'Movidos para o backup (nada foi apagado):']
+  for (const m of r.moved) lines.push(`  ${short(m)} → ${r.to}/${m.split('/').pop()}`)
   return `${lines.join('\n')}\n`
 }

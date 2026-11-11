@@ -26,6 +26,7 @@ const main = defineCommand({
     watch: () => import('./commands/watch.js').then((m) => m.default),
     install: () => import('./commands/install.js').then((m) => m.default),
     doctor: () => import('./commands/doctor.js').then((m) => m.default),
+    migrate: () => import('./commands/migrate.js').then((m) => m.default),
   },
 })
 

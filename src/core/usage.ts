@@ -62,7 +62,7 @@ export function readUsage(paths: Paths): UsageFile {
 }
 
 /** Impressão de uma medição `ok`: as quatro grandezas que a API repete para a mesma conta. */
-function fingerprint(m: Measurement | undefined): string | null {
+export function fingerprint(m: Measurement | undefined): string | null {
   if (!m?.ok) return null
   return `${m.fiveHour.resetsAt}|${m.sevenDay.resetsAt}|${m.fiveHour.utilization}|${m.sevenDay.utilization}`
 }

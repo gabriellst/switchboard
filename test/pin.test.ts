@@ -601,12 +601,12 @@ describe('applyPending', () => {
     expect(watchLog(sb)).not.toMatch(/sk-ant-/)
   })
 
-  test('itens de outros motivos (migrate) ficam intocados na fila', async () => {
+  test('itens migrate são do applyPending (o destino é recalculado: test/migrate.test.ts); de sessão sumida saem da fila', async () => {
     const sb = world()
     const cfg = await cfgOf(sb)
-    queue(sb, [{ jobId: 'deadbeef', settings: '/y', reason: 'migrate' }])
-    expect(applyPending(ctxAt(sb), cfg)).toEqual([])
-    expect(pending(sb).map((i) => i.reason)).toEqual(['migrate'])
+    queue(sb, [{ jobId: 'deadbeef', settings: muxLink(sb.paths, 'bk'), reason: 'migrate' }])
+    expect(applyPending(ctxAt(sb), cfg)).toEqual([{ jobId: 'deadbeef', result: 'gone' }])
+    expect(pending(sb)).toEqual([])
   })
 
   test('item adulterado (settings fora dos nossos links, conta fora de accounts) → sai da fila sem tocar na sessão', async () => {

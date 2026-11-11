@@ -463,7 +463,7 @@ async function runTick(ctx: Ctx, cfg: Config, opts: TickOptions, report: TickRep
   // `applyPending` já avisa o que aplicou e nunca o que ainda espera (`queued`); o que saiu da fila sem ser aplicado, não
   for (const p of report.pending) {
     if (p.result === 'gone') {
-      const msg = `O pedido de pin/unpin/adoção da sessão ${p.jobId} foi descartado (a sessão sumiu ou o pedido não vale mais).`
+      const msg = `O pedido de pin/unpin/adoção/migração da sessão ${p.jobId} foi descartado (a sessão sumiu ou o pedido não vale mais).`
       tell(ctx, msg)
       report.notices.push(msg)
     } else if (p.result !== 'queued') {

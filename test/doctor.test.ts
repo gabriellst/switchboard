@@ -230,6 +230,14 @@ describe('diagnose — erros', () => {
     expect(shape(fs)).toEqual(['error:view.no-settings:pid 101', 'error:view.no-settings:pid 104'])
   })
 
+  test('view.no-settings: a linha literal do ps do usuário (`claude agents --cwd <pasta>`, sem --settings)', async () => {
+    const sb = healthy()
+    putPs(sb, '  4321 /Users/work/.local/bin/claude agents --cwd /Users/work/Desktop/Projetos/bk-company')
+    const fs = await diagnose(ctxAt(sb))
+    expect(shape(fs)).toEqual(['error:view.no-settings:pid 4321'])
+    expect(only(fs, 'view.no-settings')[0]!.message).not.toContain('/Users/work/Desktop') // a linha de comando nunca vai para o achado
+  })
+
   test('view.no-settings: settings inline com token nunca vai para o achado', async () => {
     const sb = healthy()
     putPs(sb, `  101 claude agents --settings {"env":{"CLAUDE_CODE_OAUTH_TOKEN":"${FAKE_TOKEN}"}}`)

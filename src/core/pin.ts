@@ -6,8 +6,8 @@ import { assertSessionId, listAgents, stopSession } from './claude.js'
 import { EXIT, SbError } from './errors.js'
 import { checkSettingsTarget, ensurePin, type TargetProblem } from './links.js'
 import { resolveMuxForDir } from './mux.js'
-import { assertSafeName, backupDir, muxLink, pinLink } from './paths.js'
-import { ownershipOf, replaceSettings, writeJobFlags } from './jobs.js'
+import { assertSafeName, backupDir, muxLink, pinLink, type Paths } from './paths.js'
+import { legacySource, ownershipOf, replaceSettings, writeJobFlags } from './jobs.js'
 import { readRuntime, writeRuntime, type Runtime } from './runtime.js'
 import { activityOf, callerJobId, loadSessions, loadSessionsWithWarnings, type Session } from './sessions.js'
 import type { RestartOptions } from './swap.js'
@@ -29,6 +29,9 @@ import { ensureState, KEYCHAIN, tokenStatus } from './tokens.js'
 //     intercale com trabalho que precise responder rápido a sinais.
 // `adopt` (pedido do `sb doctor --fix`: sessão em segundo plano SEM `--settings`) segue as MESMAS regras, com o destino
 // fixo em `mux/<mux da PASTA da sessão>.json`; legado e terceiros nunca são adotados.
+// `migrate` (pedido do `sb migrate`: sessão com `--settings` do claude-conta) também: o destino é RECALCULADO a partir
+// dos próprios flags da sessão (`contas/ativa.json` → `mux/<mux da pasta>.json`; `contas-fixas/<c>.json` → `pins/<c>.json`,
+// com `c` dentro dos `accounts` do mux) e o pedido da fila só vale se coincidir com ele; nunca se confia no que a fila diz.
 // O backup (`backup/pin-<stamp>/<id>.state.json`) é cópia do `state.json` inteiro: se a sessão tem um `--settings`
 // inline de terceiros com token, o token vai junto (arquivo 600 em diretório 700, como o resto do estado).
 // ---------------------------------------------------------------------------------------------------------------
@@ -138,13 +141,44 @@ interface Target {
 
 type Resolved = { kind: 'target'; target: Target } | { kind: 'unchanged' }
 
+/** `normal`: pin/unpin do usuário; `adopt`: sessão sem `--settings`; `migrate`: sessão do claude-conta. */
+type Mode = 'normal' | 'adopt' | 'migrate'
+
+/**
+ * Destino de uma sessão do claude-conta (migração), calculado SÓ a partir dos flags dela e da config: `contas/ativa.json`
+ * → `mux/<mux da PASTA>.json` (`account: null`); `contas-fixas/<c>.json` → `pins/<c>.json`, e `c` tem de estar nos
+ * `accounts` do mux da pasta (limite duro: fixar `admin1` numa pasta do keychain arrastaria o berzerk). `contas/<outra>.json`
+ * direto não é a ativa nem uma fixa: não se adivinha. Recusas são `SbError` exit 3.
+ */
+export function migrationTarget(paths: Paths, cfg: Config, s: Session): Target {
+  const id = s.agent.id
+  const src = s.job === null ? null : legacySource(s.job.respawnFlags, paths)
+  if (src === null) throw usageError(`a sessão ${id} não tem um --settings do claude-conta que a migração saiba traduzir`)
+  if (src.dir === 'contas' && src.name !== 'ativa') {
+    throw usageError(`a sessão ${id} usa ~/.claude/contas/${src.name}.json direto (nem a ativa nem uma fixa): o sb não adivinha o destino`, '  reabra-a com `sb agents`/`sb run`, ou fixe com `sb pin`')
+  }
+  const mux = resolveMuxForDir(cfg, s.agent.cwd, paths.home)
+  if (src.dir === 'contas') return { account: null, mux, link: muxLink(paths, mux) }
+  const allowed = cfg.mux[mux]!.accounts
+  if (!allowed.includes(src.name)) {
+    throw usageError(`a conta "${src.name}" da sessão fixa ${id} não pertence ao mux "${mux}" da pasta dela (contas permitidas: ${allowed.join(', ')})`, `  anexe com \`sb attach ${src.name} ${mux}\` e fixe com \`sb pin\``)
+  }
+  return { account: src.name, mux, link: pinLink(paths, src.name) }
+}
+
 /**
  * Decide o destino SEM gravar nada. Recusas (exit 3): sessão que não é nossa (só `--settings` de mux/pin), conta fora de
  * `accounts` do mux, `unpin` de quem não está fixa. `unchanged`: a sessão já está no destino (fixa nessa conta, ou solta num `unpin`).
  */
-function resolveTarget(ctx: Ctx, cfg: Config, s: Session, account: string | null, adopt = false): Resolved {
+function resolveTarget(ctx: Ctx, cfg: Config, s: Session, account: string | null, mode: Mode = 'normal'): Resolved {
   const id = s.agent.id
-  if (adopt) {
+  if (mode === 'migrate') {
+    // já é do sb (migrada à mão, ou por outra rodada): nada a fazer; o que não é do claude-conta, não é da migração
+    if (s.owner.kind === 'mux' || s.owner.kind === 'pin') return { kind: 'unchanged' }
+    if (s.owner.kind !== 'legacy') throw usageError(`a sessão ${id} ${s.owner.kind === 'none' ? 'não tem --settings' : 'tem --settings de terceiros'}: não é do claude-conta, a migração não mexe nela`)
+    return { kind: 'target', target: migrationTarget(ctx.paths, cfg, s) }
+  }
+  if (mode === 'adopt') {
     // adoção: só quem NÃO tem `--settings` (e cujo state.json foi lido: `none` também é o que sobra de um arquivo ilegível)
     if (s.owner.kind === 'mux' || s.owner.kind === 'pin') return { kind: 'unchanged' }
     if (s.owner.kind !== 'none') throw usageError(`a sessão ${id} ${s.owner.kind === 'legacy' ? 'é do claude-conta (legado)' : 'tem --settings de terceiros'}: o sb não a adota`)
@@ -218,7 +252,7 @@ function existsLink(path: string): boolean {
 
 const isQueued = (i: Runtime['pending'][number]): boolean => i.reason === 'pin' || i.reason === 'unpin'
 
-/** Tira de `runtime.pending` os pedidos pin/unpin da sessão (`adopt`/`migrate` são de outras tarefas). `true` se mudou. */
+/** Tira de `runtime.pending` os pedidos pin/unpin da sessão (`adopt`/`migrate` têm a própria fila: `enqueueRequest`). `true` se mudou. */
 function dropPending(runtime: Runtime, jobId: string): boolean {
   const n = runtime.pending.length
   runtime.pending = runtime.pending.filter((i) => !(isQueued(i) && i.jobId === jobId))
@@ -258,14 +292,14 @@ function freshBackup(ctx: Ctx, id: string): string {
  * item da fila (tem que coincidir com o destino recalculado; senão o item não vale mais → exit 3). Com `expectLink`
  * (caminho da fila), uma sessão cujo `state.json` não pôde ser lido (`job === null`: ausente ou meio gravado num tick)
  * NÃO é recusada como estranha: não dá para saber de quem ela é, então volta `queued`/`unreadable` e o item espera.
- * No comando direto (`expectLink` ausente) continua exit 3. `adopt`: ver `resolveTarget`.
+ * No comando direto (`expectLink` ausente) continua exit 3. `mode`: ver `resolveTarget`.
  */
-function settle(ctx: Ctx, cfg: Config, id: string, account: string | null, expectLink: string | undefined, opts: RestartOptions, first?: Session, adopt = false): Settled {
+function settle(ctx: Ctx, cfg: Config, id: string, account: string | null, expectLink: string | undefined, opts: RestartOptions, first?: Session, mode: Mode = 'normal'): Settled {
   const caller = callerJobId(ctx.env)
   const s = first ?? loadSessions(ctx).find((x) => x.agent.id === id)
   if (s === undefined) return { result: 'gone' }
   if (s.job === null && expectLink !== undefined) return { result: 'queued', why: 'unreadable' }
-  const r = resolveTarget(ctx, cfg, s, account, adopt)
+  const r = resolveTarget(ctx, cfg, s, account, mode)
   if (r.kind === 'unchanged') return { result: 'unchanged' }
   const t = r.target
   if (expectLink !== undefined && t.link !== expectLink) throw usageError(`o pedido da sessão ${id} não vale mais (o destino mudou)`)
@@ -396,7 +430,7 @@ function noteOnce(ctx: Ctx, runtime: Runtime, key: string, line: string): void {
 }
 
 /**
- * Aplica a fila `runtime.pending` (itens `pin`/`unpin`/`adopt`; `migrate` fica intocado) — usado pelo `watch`.
+ * Aplica a fila `runtime.pending` (itens `pin`/`unpin`/`adopt`/`migrate`) — usado pelo `watch`.
  * EXIGE O LOCK JÁ TOMADO (o `watch` já o segura no tick; `pin`/`unpin` usam `withLock`): lê e grava `runtime.json`.
  * Bloqueante (`claude stop`). Por item, a mesma lógica de `pinSession` com dados frescos:
  *   - sessão sumida, ou que deixou de ser nossa / cujo pedido não vale mais (conta fora de `accounts`, `settings`
@@ -411,7 +445,7 @@ function noteOnce(ctx: Ctx, runtime: Runtime, key: string, line: string): void {
  */
 export function applyPending(ctx: Ctx, cfg: Config, opts: RestartOptions = {}): PendingOutcome[] {
   const runtime = readRuntime(ctx.paths)
-  const items = runtime.pending.filter((i) => isQueued(i) || i.reason === 'adopt')
+  const items = runtime.pending.filter((i) => isQueued(i) || i.reason === 'adopt' || i.reason === 'migrate')
   if (items.length === 0) return []
   const before = JSON.stringify(runtime)
   const removed = new Set<Runtime['pending'][number]>()
@@ -432,16 +466,19 @@ export function applyPending(ctx: Ctx, cfg: Config, opts: RestartOptions = {}): 
         assertSessionId(jobId)
         if (typeof item.settings !== 'string') throw usageError(`pedido pendente da sessão ${jobId} sem destino`)
         const owner = ownershipOf(['--settings', item.settings], ctx.paths)
-        // o destino do pedido tem que ser um dos NOSSOS links; o `unpin` e o `adopt` valem para um mux, o `pin` para uma conta
+        // o destino do pedido tem que ser um dos NOSSOS links; o `unpin` e o `adopt` valem para um mux, o `pin` para uma conta,
+        // o `migrate` para qualquer um dos dois (o destino certo é recalculado a partir dos flags da sessão e tem de coincidir)
         const account = item.reason === 'pin' && owner.kind === 'pin' ? owner.account : null
-        if (item.reason === 'pin' ? owner.kind !== 'pin' : owner.kind !== 'mux') throw usageError(`pedido pendente da sessão ${jobId} com destino inválido`)
+        const validDestination = item.reason === 'pin' ? owner.kind === 'pin' : item.reason === 'migrate' ? owner.kind === 'mux' || owner.kind === 'pin' : owner.kind === 'mux'
+        if (!validDestination) throw usageError(`pedido pendente da sessão ${jobId} com destino inválido`)
         // recuo (só no `watch`): uma parada que falhou não é repetida para o MESMO pedido (`requestedAt`); um pedido novo tenta de novo
         const stopfail = `pin:${jobId}:stopfail:${item.requestedAt}`
         if (opts.throttle !== undefined && runtime.notified[stopfail] !== undefined) {
           out.push({ jobId, settings: item.settings, result: 'queued' })
           continue
         }
-        const r = settle(ctx, cfg, jobId, account, item.settings, opts, undefined, item.reason === 'adopt')
+        const mode: Mode = item.reason === 'adopt' ? 'adopt' : item.reason === 'migrate' ? 'migrate' : 'normal'
+        const r = settle(ctx, cfg, jobId, account, item.settings, opts, undefined, mode)
         if (!(r.result === 'queued' && r.why === 'unreadable')) delete runtime.notified[`pin:${jobId}:unreadable`] // lido de novo: um próximo apagão volta a avisar
         switch (r.result) {
           case 'gone':
@@ -470,7 +507,7 @@ export function applyPending(ctx: Ctx, cfg: Config, opts: RestartOptions = {}): 
             delete runtime.notified[stopfail]
             out.push({ jobId, settings: item.settings, result: r.result })
             note(ctx, `pin: sessão ${jobId} ${r.result} (${item.reason})`)
-            tell(ctx, `Sessão ${jobId}: ${item.reason === 'pin' ? `fixada em ${account}` : item.reason === 'adopt' ? `adotada pelo mux ${owner.kind === 'mux' ? owner.mux : '?'}` : 'solta do pin'}${r.result === 'stopped-and-rewritten' ? '; reabra-a para valer' : ''}.`)
+            tell(ctx, `Sessão ${jobId}: ${item.reason === 'pin' ? `fixada em ${account}` : item.reason === 'adopt' ? `adotada pelo mux ${owner.kind === 'mux' ? owner.mux : '?'}` : item.reason === 'migrate' ? `migrada do claude-conta para o sb (${owner.kind === 'pin' ? `fixa em ${owner.account}` : `mux ${owner.kind === 'mux' ? owner.mux : '?'}`})` : 'solta do pin'}${r.result === 'stopped-and-rewritten' ? '; reabra-a para valer' : ''}.`)
         }
       } catch (e) {
         if (!(e instanceof SbError)) throw e
@@ -497,13 +534,13 @@ export function applyPending(ctx: Ctx, cfg: Config, opts: RestartOptions = {}): 
 
 export type AdoptResult = 'rewritten' | 'queued' | 'unchanged' | 'gone'
 
-/** Põe (ou mantém) o pedido de adoção da sessão em `runtime.pending`; o mesmo pedido de novo não regrava nada. */
-function enqueueAdopt(ctx: Ctx, jobId: string, link: string): void {
+/** Põe (ou mantém) o pedido de adoção/migração da sessão em `runtime.pending`; o mesmo pedido de novo não regrava nada. */
+function enqueueRequest(ctx: Ctx, reason: 'adopt' | 'migrate', jobId: string, link: string): void {
   const runtime = readRuntime(ctx.paths)
-  const same = runtime.pending.filter((i) => i.reason === 'adopt' && i.jobId === jobId)
+  const same = runtime.pending.filter((i) => i.reason === reason && i.jobId === jobId)
   if (same.length === 1 && same[0]!.settings === link) return
-  runtime.pending = runtime.pending.filter((i) => !(i.reason === 'adopt' && i.jobId === jobId))
-  runtime.pending.push({ jobId, settings: link, reason: 'adopt', requestedAt: ctx.now() })
+  runtime.pending = runtime.pending.filter((i) => !(i.reason === reason && i.jobId === jobId))
+  runtime.pending.push({ jobId, settings: link, reason, requestedAt: ctx.now() })
   writeRuntime(ctx.paths, runtime)
 }
 
@@ -520,19 +557,49 @@ export function adoptSession(ctx: Ctx, cfg: Config, id: string): AdoptResult {
   assertSessionId(id)
   const s = loadSessions(ctx).find((x) => x.agent.id === id)
   if (s === undefined) return 'gone'
-  const r = resolveTarget(ctx, cfg, s, null, true)
+  const r = resolveTarget(ctx, cfg, s, null, 'adopt')
   if (r.kind === 'unchanged') return 'unchanged'
-  const settled = settle(ctx, cfg, id, null, undefined, { throttle: { stops: 0 } }, s, true)
+  const settled = settle(ctx, cfg, id, null, undefined, { throttle: { stops: 0 } }, s, 'adopt')
   switch (settled.result) {
     case 'gone':
     case 'unchanged':
       return settled.result
     case 'queued':
-      enqueueAdopt(ctx, id, r.target.link)
+      enqueueRequest(ctx, 'adopt', id, r.target.link)
       note(ctx, `adopt: sessão ${id} na fila (${settled.why})`)
       return 'queued'
     default:
       note(ctx, `adopt: sessão ${id} reescrita (estava parada)`)
+      return 'rewritten'
+  }
+}
+
+/**
+ * Migração de UMA sessão do claude-conta (`sb migrate`): troca o `--settings` legado pelo destino que `migrationTarget`
+ * calcula dos flags dela (link do mux da pasta, ou `pins/<conta>.json`). EXIGE O LOCK JÁ TOMADO. NUNCA para uma sessão:
+ * o passo comum roda com saldo ZERO de paradas, então só uma sessão PARADA é reescrita (`rewritten`: backup, modo preservado,
+ * `pid` reconferido antes de gravar); viva, ocupada ou que ganhou `pid` no meio-tempo vai para `runtime.pending`
+ * (`queued`, `reason: 'migrate'`, sem duplicar) e o `watch` a aplica quando ela ficar livre (`applyPending`). `unchanged`:
+ * já é do sb; `gone`: sumiu. Não ser do claude-conta, destino que a migração não traduz ou conta fora dos `accounts` do mux:
+ * `SbError` exit 3; link inválido ou `state.json` ilegível: exit 1, antes de gravar ou enfileirar qualquer coisa.
+ */
+export function migrateSession(ctx: Ctx, cfg: Config, id: string): AdoptResult {
+  assertSessionId(id)
+  const s = loadSessions(ctx).find((x) => x.agent.id === id)
+  if (s === undefined) return 'gone'
+  const r = resolveTarget(ctx, cfg, s, null, 'migrate')
+  if (r.kind === 'unchanged') return 'unchanged'
+  const settled = settle(ctx, cfg, id, null, undefined, { throttle: { stops: 0 } }, s, 'migrate')
+  switch (settled.result) {
+    case 'gone':
+    case 'unchanged':
+      return settled.result
+    case 'queued':
+      enqueueRequest(ctx, 'migrate', id, r.target.link)
+      note(ctx, `migrate: sessão ${id} na fila (${settled.why})`)
+      return 'queued'
+    default:
+      note(ctx, `migrate: sessão ${id} reescrita (estava parada)`)
       return 'rewritten'
   }
 }

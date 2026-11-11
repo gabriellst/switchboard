@@ -174,8 +174,11 @@ const INLINE = '<JSON inline>'
 
 type OursOrForeign = Exclude<Ownership, { kind: 'none' }>
 
-function classify(value: string, paths: Paths): OursOrForeign {
-  const foreign: OursOrForeign = { kind: 'foreign', path: value.trimStart().startsWith('{') ? INLINE : value }
+/** Como `OursOrForeign`, mas o legado (claude-conta) carrega de qual diretório e qual arquivo veio (`name` null = nome fora da regra). */
+type Classified = Exclude<OursOrForeign, { kind: 'legacy' }> | { kind: 'legacy'; dir: 'contas' | 'contas-fixas'; name: string | null }
+
+function classify(value: string, paths: Paths): Classified {
+  const foreign: Classified = { kind: 'foreign', path: value.trimStart().startsWith('{') ? INLINE : value }
   const v = value === '~' ? paths.home : value.startsWith('~/') ? join(paths.home, value.slice(2)) : value
   if (!isAbsolute(v)) return foreign // relativo é contra o cwd da sessão, que não conhecemos: nunca adivinhamos
   const full = resolve(v)
@@ -199,7 +202,8 @@ function classify(value: string, paths: Paths): OursOrForeign {
     const n = safe()
     return n === null ? foreign : { kind: 'pin', account: n }
   }
-  if (at(join(paths.claudeDir, 'contas')) || at(join(paths.claudeDir, 'contas-fixas'))) return { kind: 'legacy' }
+  if (at(join(paths.claudeDir, 'contas'))) return { kind: 'legacy', dir: 'contas', name: safe() }
+  if (at(join(paths.claudeDir, 'contas-fixas'))) return { kind: 'legacy', dir: 'contas-fixas', name: safe() }
   return foreign
 }
 
@@ -213,9 +217,23 @@ export function ownershipOf(flags: string[], paths: Paths): Ownership {
   for (const v of settingsValues(flags)) {
     const c = classify(v, paths)
     if (c.kind === 'foreign') foreign = c
-    else ours = c
+    else ours = c.kind === 'legacy' ? { kind: 'legacy' } : c
   }
   return ours ?? foreign ?? { kind: 'none' }
+}
+
+/**
+ * De onde vem o `--settings` legado (claude-conta) que manda na sessão — o mesmo critério de `ownershipOf` (vale o último
+ * dos NOSSOS): `contas/<name>.json` (`ativa` = a conta ativa) ou `contas-fixas/<name>.json` (sessão fixa). `null` se o dono
+ * não é o legado ou o nome do arquivo não é um nome válido. É o que a migração usa para decidir o destino de cada sessão.
+ */
+export function legacySource(flags: string[], paths: Paths): { dir: 'contas' | 'contas-fixas'; name: string } | null {
+  let last: Classified | undefined
+  for (const v of settingsValues(flags)) {
+    const c = classify(v, paths)
+    if (c.kind !== 'foreign') last = c
+  }
+  return last?.kind === 'legacy' && last.name !== null ? { dir: last.dir, name: last.name } : null
 }
 
 /**

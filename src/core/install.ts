@@ -8,7 +8,7 @@ import type { Paths } from './paths.js'
 export const LAUNCH_LABEL = 'com.gabriellst.switchboard.watch'
 
 /** Marcas nas linhas do `~/.zshrc`: a do `claude-conta` (não mexemos) e a nossa. */
-const OLD_MARK = '# claude-conta'
+export const OLD_MARK = '# claude-conta'
 const OUR_MARK = '# switchboard'
 
 export const plistFile = (p: Paths): string => join(p.launchAgentsDir, `${LAUNCH_LABEL}.plist`)
@@ -228,7 +228,7 @@ function readIfExists(file: string): string | undefined {
  * Uma linha só. Sem o wrapper (apagado, estado movido) um `[ -f ] && source` pularia em silêncio e nenhum `claude()`
  * existiria: todo `claude` rodaria no keychain. O `else` define um `claude` que recusa.
  */
-function zshrcLine(wrapper: string): string {
+export function zshrcLine(wrapper: string): string {
   const w = shQuote(wrapper)
   const refuse = 'print -ru2 -- "✗ sb: o wrapper do claude sumiu; o claude NÃO foi aberto. Rode: sb install"; return 1'
   return `if [ -f ${w} ]; then source ${w}; else unalias claude 2>/dev/null; function claude { ${refuse}; }; fi  ${OUR_MARK}`

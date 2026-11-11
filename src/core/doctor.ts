@@ -268,20 +268,28 @@ function checkSessions(ctx: Ctx, cfg: Config | null, sessions: Session[], add: A
   }
 }
 
-/** `claude agents` (a view interativa) vindos de `ps`; a listagem `--json` do próprio sb/watch não é view. */
-function listViews(ctx: Ctx): Array<{ pid: number; args: string[] }> {
+/** Uma linha de `ps -axo pid=,command=`: o pid e a linha de comando inteira (quem usa NUNCA a repete numa saída: pode ter `--settings` inline com token). */
+export function psTable(ctx: Ctx): Array<{ pid: number; command: string }> {
   const r = ctx.run(psBin(ctx.env), ['-axo', 'pid=,command='], { timeoutMs: 10_000 })
   if (r.status !== 0) return []
-  const names = new Set(['claude', basename(claudeBin(ctx.env))])
-  const out: Array<{ pid: number; args: string[] }> = []
+  const out: Array<{ pid: number; command: string }> = []
   for (const line of r.stdout.split('\n')) {
     const m = /^\s*(\d+)\s+(\S.*)$/.exec(line)
-    if (!m) continue
-    const tokens = m[2]!.trim().split(/\s+/)
+    if (m) out.push({ pid: Number(m[1]), command: m[2]!.trim() })
+  }
+  return out
+}
+
+/** `claude agents` (a view interativa) vindos de `ps`; a listagem `--json` do próprio sb/watch não é view. */
+export function listViews(ctx: Ctx): Array<{ pid: number; args: string[] }> {
+  const names = new Set(['claude', basename(claudeBin(ctx.env))])
+  const out: Array<{ pid: number; args: string[] }> = []
+  for (const { pid, command } of psTable(ctx)) {
+    const tokens = command.split(/\s+/)
     if (!names.has(basename(tokens[0]!)) || tokens[1] !== 'agents') continue
     const args = tokens.slice(2)
     if (args.includes('--json')) continue
-    out.push({ pid: Number(m[1]), args })
+    out.push({ pid, args })
   }
   return out
 }
