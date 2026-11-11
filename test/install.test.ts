@@ -4,13 +4,15 @@ import { join } from 'node:path'
 import { expect, test } from 'bun:test'
 import type { Ctx } from '../src/core/ctx.js'
 import { SbError } from '../src/core/errors.js'
-import { findClaudeDir, LAUNCH_LABEL, planInstall, plistFile, runInstall, slashCommandFile, wrapperFile } from '../src/core/install.js'
+import { findClaudeDir, LAUNCH_LABEL, stableRuntime, planInstall, plistFile, runInstall, slashCommandFile, wrapperFile } from '../src/core/install.js'
 import { muxLink } from '../src/core/paths.js'
 import { FAKE_TOKEN, filesUnder, populatedSandbox, sandbox, type Sandbox } from './helpers.js'
 
 const CLI = join(import.meta.dir, '..', 'src', 'cli.ts')
 const FAKE_CLAUDE = join(import.meta.dir, 'fake-claude.ts')
 const UID = process.getuid!()
+/** ambiente mínimo para os `zsh` que não são o wrapper em ação: nada do ambiente real (HOME, PATH, ~/.zshenv) entra */
+const isolatedEnv = (sb: Sandbox): Record<string, string> => ({ HOME: sb.paths.home, PATH: '/usr/bin:/bin' })
 
 const planFor = (sb: Sandbox, over: Partial<{ runtimeBin: string; cliPath: string; claudeDir: string }> = {}) =>
   planInstall(sb.paths, { runtimeBin: process.execPath, cliPath: CLI, claudeDir: join(sb.dir, 'claude-bin'), ...over })
@@ -65,6 +67,7 @@ test('plist: label, ProgramArguments, KeepAlive, logs, ambiente mínimo e sem to
   expect(data.ProgramArguments).toEqual([process.execPath, CLI, 'watch'])
   expect(data.RunAtLoad).toBe(true)
   expect(data.KeepAlive).toBe(true)
+  expect(data.ThrottleInterval).toBe(30) // watch que sai (5 = lock, 2 = config) não é relançado a cada ~10 s
   expect(data.StandardOutPath).toBe(join(sb.paths.stateDir, 'log', 'watch.out'))
   expect(data.StandardErrorPath).toBe(join(sb.paths.stateDir, 'log', 'watch.out'))
   const env = data.EnvironmentVariables as Record<string, string>
@@ -112,7 +115,7 @@ test('wrapper gerado: sintaxe válida no zsh, com caminhos de aspas e espaços, 
   expect(w).not.toMatch(/sk-ant-/)
   mkdirSync(sb.paths.stateDir, { recursive: true })
   writeFileSync(wrapperFile(sb.paths), w)
-  const r = spawnSync('/bin/zsh', ['-n', wrapperFile(sb.paths)], { encoding: 'utf8' })
+  const r = spawnSync('/bin/zsh', ['-n', wrapperFile(sb.paths)], { encoding: 'utf8', env: isolatedEnv(sb) })
   expect(r.stderr).toBe('')
   expect(r.status).toBe(0)
 })
@@ -204,7 +207,14 @@ test('zshrc: sem claude-conta a linha é acrescentada uma vez (e o resto do arqu
   runInstall(sb.ctx({ run: fakeRun().run }), planFor(sb), { simular: false })
   runInstall(sb.ctx({ run: fakeRun().run }), planFor(sb), { simular: false })
   const w = wrapperFile(sb.paths)
-  expect(readFileSync(sb.paths.zshrc, 'utf8')).toBe(`export A=1\nalias x=y\n[ -f ${w} ] && source ${w}  # switchboard\n`)
+  const text = readFileSync(sb.paths.zshrc, 'utf8')
+  expect(text.startsWith('export A=1\nalias x=y\n')).toBe(true)
+  const added = text.slice('export A=1\nalias x=y\n'.length)
+  expect(added.endsWith('  # switchboard\n')).toBe(true)
+  expect(added.split('\n').length).toBe(2) // uma linha só
+  expect(added).toContain(`[ -f ${w} ]`)
+  expect(added).toContain(`source ${w}`)
+  expect(added).toMatch(/\belse\b.*\bclaude\b.*return 1/) // sem o wrapper, o claude recusa em vez de rodar no keychain
 })
 
 test('zshrc: sem arquivo, ele é criado só com a linha; caminho com espaço sai entre aspas', () => {
@@ -213,9 +223,13 @@ test('zshrc: sem arquivo, ele é criado só com a linha; caminho com espaço sai
   const paths = { ...spaced.paths, stateDir: join(spaced.dir, 'meu estado'), zshrc: join(spaced.dir, 'zshrc-novo') }
   runInstall(spaced.ctx({ run: fakeRun().run, paths }), planInstall(paths, { runtimeBin: 'bun', cliPath: CLI, claudeDir: '/x' }), { simular: false })
   const w = join(paths.stateDir, 'wrapper.zsh')
-  expect(readFileSync(paths.zshrc, 'utf8')).toBe(`[ -f '${w}' ] && source '${w}'  # switchboard\n`)
+  const text = readFileSync(paths.zshrc, 'utf8')
+  expect(text).toContain(`[ -f '${w}' ]`)
+  expect(text).toContain(`source '${w}'`)
+  expect(text.endsWith('  # switchboard\n')).toBe(true)
+  expect(text.split('\n').length).toBe(2)
   // o que foi gravado precisa ser zsh válido e carregar o wrapper de verdade
-  const r = spawnSync('/bin/zsh', ['-c', `source ${JSON.stringify(paths.zshrc)}; whence -w claude`], { encoding: 'utf8', env: { HOME: sb.paths.home, PATH: '/usr/bin:/bin' } })
+  const r = spawnSync('/bin/zsh', ['-c', `source ${JSON.stringify(paths.zshrc)}; whence -w claude`], { encoding: 'utf8', env: isolatedEnv(sb) })
   expect(r.stdout.trim()).toBe('claude: function')
 })
 
@@ -233,7 +247,7 @@ test('zshrc com claude-conta não é alterado: o resultado manda rodar `sb migra
 
 test('zshrc: linha `# switchboard` diferente (estado movido) não é reescrita; o resultado avisa', () => {
   const sb = sandbox()
-  const text = '[ -f /velho/wrapper.zsh ] && source /velho/wrapper.zsh  # switchboard\n'
+  const text = '[ -f /velho/wrapper.zsh ] && source /velho/wrapper.zsh  # switchboard\n' // formato antigo (e/ou outro estado) conta como diferente
   writeFileSync(sb.paths.zshrc, text)
   const res = runInstall(sb.ctx({ run: fakeRun().run }), planFor(sb), { simular: false })
   expect(readFileSync(sb.paths.zshrc, 'utf8')).toBe(text)
@@ -352,11 +366,27 @@ test('wrapper: subcomando de manutenção passa direto, sem --settings e sem o t
   expect(calls.every((c) => c.hasOauthEnv === false)).toBe(true)
 })
 
-test('wrapper: dentro de uma sessão (CLAUDECODE) passa direto, sem --settings', () => {
+test('wrapper: dentro de uma sessão (CLAUDECODE) passa direto, sem --settings (e herda o ambiente da sessão)', () => {
   const sb = populatedSandbox()
   const r = runWrapper(sb, join(sb.paths.home, 'bk'), ['-p', 'oi'], { CLAUDECODE: '1' })
   expect(r.code).toBe(0)
-  expect(sb.calls().map((c) => c.argv)).toEqual([['-p', 'oi']])
+  // o filho de uma sessão herda a conta dela: aqui o token do ambiente da sessão segue junto, de propósito
+  expect(sb.calls().map((c) => ({ argv: c.argv, hasOauthEnv: c.hasOauthEnv }))).toEqual([{ argv: ['-p', 'oi'], hasOauthEnv: true }])
+})
+
+test('wrapper: subcomando de manutenção dentro de uma sessão (CLAUDECODE) também sai sem o token herdado', () => {
+  const sb = populatedSandbox()
+  const dir = join(sb.paths.home, 'bk')
+  for (const s of ['daemon', 'setup-token', 'auth', 'mcp']) runWrapper(sb, dir, [s, 'start'], { CLAUDECODE: '1' }) // o daemon herdaria o token e o levaria a todas as sessões
+  const calls = sb.calls()
+  expect(calls.map((c) => c.argv)).toEqual([['daemon', 'start'], ['setup-token', 'start'], ['auth', 'start'], ['mcp', 'start']])
+  expect(calls.every((c) => c.hasOauthEnv === false)).toBe(true)
+})
+
+test('wrapper: --settings explícito dentro de uma sessão (CLAUDECODE) segue a sessão: passa direto', () => {
+  const sb = populatedSandbox()
+  runWrapper(sb, join(sb.paths.home, 'bk'), ['--settings', '/x/y.json', '-p', 'oi'], { CLAUDECODE: '1' })
+  expect(sb.calls().map((c) => c.argv)).toEqual([['--settings', '/x/y.json', '-p', 'oi']])
 })
 
 test('wrapper: `sb which` falhando → mensagem, exit 1 e o claude não é chamado (link quebrado)', () => {
@@ -397,6 +427,100 @@ test('wrapper: o código de saída do claude é o do wrapper', () => {
   mkdirSync(sb.env.FAKE_CLAUDE_DIR!, { recursive: true })
   writeFileSync(join(sb.env.FAKE_CLAUDE_DIR!, 'exit-code'), '7')
   expect(runWrapper(sb, join(sb.paths.home, 'bk'), ['-p', 'oi']).code).toBe(7)
+})
+
+// --- ronda de correção 1 -----------------------------------------------------------------------
+
+test('wrapper: alias claude preexistente não derruba o wrapper (a função vence e leva --settings)', () => {
+  const sb = populatedSandbox()
+  mkdirSync(sb.paths.stateDir, { recursive: true })
+  writeFileSync(wrapperFile(sb.paths), byFile(planFor(sb), wrapperFile(sb.paths)).content)
+  const dir = join(sb.paths.home, 'bk')
+  mkdirSync(dir, { recursive: true })
+  // `alias claude=…` ANTES do source: o zsh expandiria o alias em `claude() {` e a definição falharia (claude seguiria alias, sem --settings)
+  const script = `alias claude='claude --x'\nsource "$1"\ncd "$2" || exit 97\nclaude -p oi` // linhas separadas: o alias vale para as linhas seguintes
+  const r = spawnSync('/bin/zsh', ['-c', script, 'zsh', wrapperFile(sb.paths), dir], {
+    env: { ...sb.env, PATH: `${claudeShimDir(sb)}:/usr/bin:/bin`, CLAUDE_CODE_OAUTH_TOKEN: FAKE_TOKEN },
+    encoding: 'utf8',
+  })
+  expect(r.stderr).toBe('')
+  expect(r.status).toBe(0)
+  expect(sb.calls().map((c) => ({ argv: c.argv, hasOauthEnv: c.hasOauthEnv }))).toEqual([{ argv: ['-p', 'oi', '--settings', muxLink(sb.paths, 'bk')], hasOauthEnv: false }])
+})
+
+test('wrapper: --settings entra ANTES do primeiro `--` (depois dele seria argumento posicional) e os argumentos chegam intactos', () => {
+  const sb = populatedSandbox()
+  const dir = join(sb.paths.home, 'bk')
+  const link = muxLink(sb.paths, 'bk')
+  const cases: Array<[string[], string[]]> = [
+    [['-p', 'oi'], ['-p', 'oi', '--settings', link]], // sem `--`: no fim
+    [['-p', '--', 'texto'], ['-p', '--settings', link, '--', 'texto']], // `--` no meio
+    [['--', 'texto'], ['--settings', link, '--', 'texto']], // `--` primeiro
+    [['-p', '--', 'a', '--', 'b'], ['-p', '--settings', link, '--', 'a', '--', 'b']], // só o primeiro `--`
+    [['-p', '--', '--settings', 'x'], ['-p', '--settings', link, '--', '--settings', 'x']], // `--settings` depois do `--` é texto, não desvio
+    [[], ['--settings', link]],
+    [['-p', 'duas  palavras', "it's", '"aspas"', '$HOME', '*', '', '--', 'a b', '$(echo x)', '`y`'], ['-p', 'duas  palavras', "it's", '"aspas"', '$HOME', '*', '', '--settings', link, '--', 'a b', '$(echo x)', '`y`']],
+  ]
+  for (const [args] of cases) expect(runWrapper(sb, dir, args).code).toBe(0)
+  const calls = sb.calls()
+  expect(calls.map((c) => c.argv)).toEqual(cases.map(([, want]) => want))
+  expect(calls.every((c) => c.hasOauthEnv === false)).toBe(true)
+})
+
+test('wrapper: ramos que passam direto — o ambiente que o claude recebeu (token herdado) em cada um', () => {
+  const sb = populatedSandbox()
+  const dir = join(sb.paths.home, 'bk')
+  runWrapper(sb, dir, ['daemon', 'start']) // 0: manutenção
+  runWrapper(sb, dir, ['--settings=/x.json', '-p', 'a']) // 1: --settings explícito
+  runWrapper(sb, dir, ['-p', 'a']) // 2: via sb which
+  runWrapper(sb, dir, ['-p', 'a'], { CLAUDECODE: '1' }) // 3: dentro de sessão
+  runWrapper(sb, dir, ['-p', '--', '--settings']) // 4: `--settings` só como texto depois do `--` não conta como explícito
+  expect(sb.calls().map((c) => c.hasOauthEnv)).toEqual([false, false, false, true, false])
+  expect(sb.calls()[4]!.argv).toEqual(['-p', '--settings', muxLink(sb.paths, 'bk'), '--', '--settings'])
+})
+
+test('stableRuntime: prefere a entrada do PATH que resolve para o mesmo binário (symlink estável); senão o execPath', () => {
+  const sb = sandbox()
+  const stable = join(sb.dir, 'stable-bin')
+  mkdirSync(stable, { recursive: true })
+  const name = process.execPath.split('/').pop()!
+  symlinkSync(process.execPath, join(stable, name))
+  const other = join(sb.dir, 'other-bin')
+  mkdirSync(other, { recursive: true })
+  symlinkSync('/bin/ls', join(other, name)) // mesmo nome, outro binário: não conta
+  expect(stableRuntime({ PATH: `/nao/existe:${other}:${stable}` }, process.execPath)).toBe(join(stable, name))
+  expect(stableRuntime({ PATH: other }, process.execPath)).toBe(process.execPath)
+  expect(stableRuntime({}, process.execPath)).toBe(process.execPath)
+})
+
+test('wrapper: runtime ou cli do sb sumiram → recusa, manda rodar `sb install` e o claude não é chamado', () => {
+  const sb = populatedSandbox()
+  const dir = join(sb.paths.home, 'bk')
+  const a = runWrapper(sb, dir, ['-p', 'oi'], {}, { runtimeBin: join(sb.dir, 'node-velho') })
+  const b = runWrapper(sb, dir, ['-p', 'oi'], {}, { cliPath: join(sb.dir, 'cli-sumiu.js') })
+  for (const r of [a, b]) {
+    expect(r.code).toBe(1)
+    expect(r.stderr).toContain('sb install')
+    expect(r.stderr).not.toContain('sb doctor')
+  }
+  expect(sb.calls()).toEqual([])
+})
+
+test('zshrc de verdade: wrapper apagado → `claude` recusa (exit 1, mensagem manda rodar sb install) e o claude falso nunca roda', () => {
+  const sb = populatedSandbox()
+  runInstall(sb.ctx({ run: fakeRun().run }), planFor(sb), { simular: false })
+  const env = { ...sb.env, PATH: `${claudeShimDir(sb)}:/usr/bin:/bin`, CLAUDE_CODE_OAUTH_TOKEN: FAKE_TOKEN }
+  const run = (): { status: number | null; stderr: string } => spawnSync('/bin/zsh', ['-c', `source "$1"\nalias claude='claude --x'\nclaude -p oi`, 'zsh', sb.paths.zshrc], { env, encoding: 'utf8' })
+  rmSync(wrapperFile(sb.paths))
+  const r = run()
+  expect(r.status).toBe(1)
+  expect(r.stderr).toContain('sb install')
+  expect(sb.calls()).toEqual([])
+  // com o wrapper no lugar, a mesma linha do zshrc carrega a função de verdade
+  runInstall(sb.ctx({ run: fakeRun().run }), planFor(sb), { simular: false })
+  const ok = spawnSync('/bin/zsh', ['-c', `source "$1"; cd "${join(sb.paths.home, 'bk')}"; claude -p oi`, 'zsh', sb.paths.zshrc], { env, encoding: 'utf8' })
+  expect(ok.status).toBe(0)
+  expect(sb.calls().map((c) => c.argv)).toEqual([['-p', 'oi', '--settings', muxLink(sb.paths, 'bk')]])
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -443,4 +567,16 @@ test('sb install sem claude no PATH: recusa com exit 4 e nada é gravado', () =>
   expect(r.code).toBe(4)
   expect(r.stderr).toContain('claude')
   expect(existsSync(plistFile(sb.paths))).toBe(false)
+})
+
+test('sb install --simular com linha `# switchboard` diferente: relata o resto e sai 1', () => {
+  const sb = populatedSandbox()
+  writeFileSync(sb.paths.zshrc, '[ -f /velho/wrapper.zsh ] && source /velho/wrapper.zsh  # switchboard\n')
+  const r = sb.runSb(['install', '--simular'])
+  expect(r.code).toBe(1)
+  expect(r.stdout).toContain('com.gabriellst.switchboard.watch.plist') // o resto do relatório saiu
+  expect(r.stdout).toContain('# switchboard')
+  const j = sb.runSb(['install', '--simular', '--json'])
+  expect(j.code).toBe(1)
+  expect((JSON.parse(j.stdout) as { zshrc: { status: string } }).zshrc.status).toBe('different')
 })

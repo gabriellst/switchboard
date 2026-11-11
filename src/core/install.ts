@@ -1,5 +1,5 @@
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
-import { delimiter, dirname, join } from 'node:path'
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
 import type { Ctx } from './ctx.js'
 import { EXIT, SbError } from './errors.js'
 import { mkdirPrivate, writeAtomic } from './fsx.js'
@@ -57,6 +57,8 @@ function plistContent(p: Paths, o: InstallPlanOptions): string {
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
   <key>StandardOutPath</key>
   ${str(log)}
   <key>StandardErrorPath</key>
@@ -82,20 +84,27 @@ const PASSTHROUGH = 'auth|attach|logs|stop|kill|rm|respawn|mcp|plugin|plugins|do
  * gravados aqui (não depende de `sb` no PATH).
  */
 function wrapperContent(o: InstallPlanOptions): string {
-  const sb = `${shQuote(o.runtimeBin)} ${shQuote(o.cliPath)}`
+  const rt = shQuote(o.runtimeBin)
+  const cli = shQuote(o.cliPath)
   return `# switchboard — gerado por \`sb install\` (não editar à mão; rode \`sb install\` de novo).
 # Acrescenta --settings <estado>/mux/<mux da pasta>.json a todo \`claude\` aberto fora de uma sessão.
 # Desligar: remova do ~/.zshrc a linha que termina em "${OUR_MARK}".
-claude() {
-  # Dentro de uma sessão Claude: o filho herda a conta da própria sessão.
-  if [[ -n \${CLAUDECODE-} ]]; then command claude "$@"; return; fi
-  # Nunca repassar um token herdado: se este comando subir o daemon, ele iria junto para todas as sessões.
+# Um alias \`claude\` preexistente faria o zsh recusar \`claude() {\` (e o claude rodaria sem --settings): tira o alias
+# e define a função na forma com a palavra \`function\`, que não expande alias.
+unalias claude 2>/dev/null
+function claude {
+  local a cwd= prev= s i
+  local -a args
+  # 1) Subcomando de manutenção: sempre sem o token herdado (o daemon o repassaria a todas as sessões), mesmo dentro de uma sessão.
   case \${1-} in
     ${PASSTHROUGH})
       ( unset CLAUDE_CODE_OAUTH_TOKEN; command claude "$@" ); return ;;
   esac
-  local a cwd= prev= s
+  # 2) Dentro de uma sessão Claude: o filho herda a conta da própria sessão.
+  if [[ -n \${CLAUDECODE-} ]]; then command claude "$@"; return; fi
+  # 3) --settings explícito (antes de um \`--\`): passa direto, sem o token herdado.
   for a in "$@"; do
+    [[ $a == -- ]] && break
     case $a in
       --settings|--settings=*) ( unset CLAUDE_CODE_OAUTH_TOKEN; command claude "$@" ); return ;;
       --cwd=*) cwd=\${a#--cwd=} ;;
@@ -103,13 +112,21 @@ claude() {
     [[ $prev == --cwd ]] && cwd=$a
     prev=$a
   done
+  # 4) O resto: o settings do mux da pasta. Sem ele o claude cairia no keychain, então qualquer falha recusa.
+  if [[ ! -x ${rt} || ! -r ${cli} ]]; then
+    print -ru2 -- "✗ sb: o sb mudou de lugar ou foi removido; o claude NÃO foi aberto. Rode: sb install"
+    return 1
+  fi
   cwd=\${cwd/#\\~/$HOME}
-  # Sem --settings o claude cairia no keychain: se o \`sb which\` falhar, não abre.
-  if ! s=$(${sb} which "\${cwd:-$PWD}") || [[ -z $s ]]; then
+  if ! s=$(${rt} ${cli} which "\${cwd:-$PWD}") || [[ -z $s ]]; then
     print -ru2 -- "✗ sb: não consegui o settings do mux desta pasta; o claude NÃO foi aberto (rode: sb doctor)."
     return 1
   fi
-  ( unset CLAUDE_CODE_OAUTH_TOKEN; command claude "$@" --settings "$s" )
+  # --settings antes do primeiro \`--\`: depois dele seria argumento posicional e o claude rodaria no keychain.
+  args=("$@")
+  i=\${args[(ie)--]}
+  args[i,0]=(--settings "$s")
+  ( unset CLAUDE_CODE_OAUTH_TOKEN; command claude "\${args[@]}" )
 }
 `
 }
@@ -132,6 +149,30 @@ export function planInstall(paths: Paths, o: InstallPlanOptions): InstallFile[] 
     { file: wrapperFile(paths), content: wrapperContent(o), mode: 0o644 },
     { file: slashCommandFile(paths), content: SLASH_COMMAND, mode: 0o644 },
   ]
+}
+
+/**
+ * O `process.execPath` é o caminho versionado (ex.: /opt/homebrew/Cellar/node/25.1/bin/node): um `brew upgrade` o apaga.
+ * Prefere a entrada do PATH que resolve para o mesmo binário (ex.: /opt/homebrew/bin/node); sem ela, o próprio execPath.
+ */
+export function stableRuntime(env: Record<string, string | undefined>, execPath: string): string {
+  let real: string
+  try {
+    real = realpathSync(execPath)
+  } catch {
+    return execPath
+  }
+  const name = basename(execPath)
+  for (const dir of (env.PATH ?? '').split(delimiter)) {
+    if (!dir || !isAbsolute(dir)) continue
+    const candidate = join(dir, name)
+    try {
+      if (realpathSync(candidate) === real) return candidate
+    } catch {
+      // não está aqui
+    }
+  }
+  return execPath
 }
 
 /** Diretório do `claude`: `SWITCHBOARD_CLAUDE` (teste) ou o primeiro executável `claude` do PATH. */
@@ -183,6 +224,16 @@ function readIfExists(file: string): string | undefined {
   }
 }
 
+/**
+ * Uma linha só. Sem o wrapper (apagado, estado movido) um `[ -f ] && source` pularia em silêncio e nenhum `claude()`
+ * existiria: todo `claude` rodaria no keychain. O `else` define um `claude` que recusa.
+ */
+function zshrcLine(wrapper: string): string {
+  const w = shQuote(wrapper)
+  const refuse = 'print -ru2 -- "✗ sb: o wrapper do claude sumiu; o claude NÃO foi aberto. Rode: sb install"; return 1'
+  return `if [ -f ${w} ]; then source ${w}; else unalias claude 2>/dev/null; function claude { ${refuse}; }; fi  ${OUR_MARK}`
+}
+
 function zshrcAction(text: string | undefined, line: string): 'append' | Exclude<ZshrcStatus, 'appended' | 'would-append'> {
   const lines = (text ?? '').split('\n')
   if (lines.some((l) => l.includes(OLD_MARK))) return 'claude-conta' // dois wrappers brigariam: a migração é do `sb migrate`
@@ -202,7 +253,7 @@ export function runInstall(ctx: Ctx, plan: InstallFile[], o: RunInstallOptions):
   if (uid === undefined) throw new SbError('não consegui o uid do usuário (o launchd só existe no macOS)', EXIT.USAGE)
   const domain = `gui/${uid}`
   const wrapper = wrapperFile(paths)
-  const line = `[ -f ${shQuote(wrapper)} ] && source ${shQuote(wrapper)}  ${OUR_MARK}`
+  const line = zshrcLine(wrapper)
 
   if (!o.simular) {
     // o launchd não cria o diretório do StandardOutPath (sem ele o job nem sobe); o estado nasce 700 antes do wrapper
