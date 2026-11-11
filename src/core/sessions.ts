@@ -24,12 +24,13 @@ export type Activity = 'stopped' | 'scheduled' | 'limit-blocked' | 'busy' | 'fre
 /**
  * Sessões `background` de `claude agents --json --all`. Um `state.json` ausente dá `job: null`; um malformado (JSON
  * inválido ou forma inesperada) TAMBÉM dá `job: null` e vira um aviso (só id e motivo do adaptador: nunca o conteúdo
- * do arquivo, que pode ter token em `respawnFlags`); uma sessão ruim não derruba as outras. A lista de agents
+ * do arquivo, que pode ter token em `respawnFlags`); uma sessão ruim não derruba as outras. `unreadable` são os ids dessas sessões (state.json que EXISTE e não se lê; ausente não conta), para quem decide algo sem ler o texto dos avisos. A lista de agents
  * malformada é outra coisa: `listAgents` lança `SbError` exit 4 e isso sobe.
  */
-export function loadSessionsWithWarnings(ctx: Ctx): { sessions: Session[]; warnings: string[] } {
+export function loadSessionsWithWarnings(ctx: Ctx): { sessions: Session[]; warnings: string[]; unreadable: string[] } {
   const sessions: Session[] = []
   const warnings: string[] = []
+  const unreadable: string[] = []
   for (const agent of listAgents(ctx)) {
     if (agent.kind !== 'background') continue
     let job: JobState | null = null
@@ -38,10 +39,11 @@ export function loadSessionsWithWarnings(ctx: Ctx): { sessions: Session[]; warni
     } catch (e) {
       if (!(e instanceof SbError)) throw e
       warnings.push(`sessão ${agent.id}: ${e.message}; sem state.json legível (viva conta como ocupada)`)
+      unreadable.push(agent.id)
     }
     sessions.push({ agent, job, owner: ownershipOf(job?.respawnFlags ?? [], ctx.paths), live: agent.pid != null })
   }
-  return { sessions, warnings }
+  return { sessions, warnings, unreadable }
 }
 
 /** Como `loadSessionsWithWarnings`, descartando a lista; cada aviso vai (sem conteúdo) para o log do `watch`, sem nunca lançar por causa do log. */

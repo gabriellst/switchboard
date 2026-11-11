@@ -331,6 +331,7 @@ describe('loadSessions', () => {
     expect(r.warnings).toHaveLength(1)
     expect(r.warnings[0]).toContain('b2c3d4e5')
     expect(r.warnings[0]).not.toContain('sk-ant-')
+    expect(r.unreadable).toEqual(['b2c3d4e5']) // o mesmo fato, estruturado: ninguém precisa ler o texto do aviso
     // loadSessions: mesma lista e o aviso vai para o log do watch, sem conteúdo
     expect(loadSessions(ctx).map((s) => s.job === null)).toEqual([false, true])
     const log = readFileSync(logFile(sb.paths, 'watch'), 'utf8')
@@ -346,6 +347,7 @@ describe('loadSessions', () => {
     const r = loadSessionsWithWarnings(sb.ctx())
     expect(r.sessions[0]!.job).toBeNull()
     expect(r.warnings).toHaveLength(1)
+    expect(r.unreadable).toEqual(['a1b2c3d4'])
     writeFileSync(join(sb.env.FAKE_CLAUDE_DIR!, 'agents.json'), '{"nao": "lista"}')
     let e: unknown
     try {

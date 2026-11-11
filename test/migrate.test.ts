@@ -323,10 +323,12 @@ describe('planMigration', () => {
 
   test('a linha literal do ps do usuário vira um mux pelo basename da pasta', async () => {
     const w = world()
-    putPs(w.sb, '  222 /Users/work/.local/bin/claude agents --cwd /Users/work/Desktop/Projetos/bk-company')
+    const dir = join(homeOf(w.sb), 'Desktop', 'Projetos', 'bk-company')
+    mkdirSync(dir, { recursive: true })
+    putPs(w.sb, `  222 /Users/work/.local/bin/claude agents --cwd ${dir}`)
     const plan = await planMigration(rig(w.sb).ctx)
     expect(plan.config.mux['bk-company']).toEqual({
-      root: '/Users/work/Desktop/Projetos/bk-company',
+      root: '~/Desktop/Projetos/bk-company',
       account: 'gabriel',
       accounts: ['admin1', 'gabriel', 'outra'],
       pool: ['gabriel', 'admin1', 'outra'],
@@ -354,6 +356,7 @@ describe('planMigration', () => {
     test('basename inválido é normalizado; vazio cai num nome de reserva; o plano segue válido', async () => {
       const w = world()
       const home = homeOf(w.sb)
+      for (const d of ['Meu_Projeto.V2', '日本', 'x'.repeat(40)]) mkdirSync(join(home, d), { recursive: true })
       putPs(w.sb, `  1 claude agents --cwd ${join(home, 'Meu_Projeto.V2')}`, `  2 claude agents --cwd ${join(home, '日本')}`, `  3 claude agents --cwd ${join(home, 'x'.repeat(40))}`)
       const plan = await planMigration(rig(w.sb).ctx)
       expect(Object.keys(plan.config.mux).sort()).toEqual(['berzerk', 'meu_projeto-v2', 'mux-1', 'x'.repeat(32)])
@@ -364,6 +367,7 @@ describe('planMigration', () => {
     test('mesmo basename em pastas diferentes: a primeira em ordem de caminho fica com o nome, a outra ganha -2', async () => {
       const w = world()
       const home = homeOf(w.sb)
+      for (const d of ['a/app', 'b/app']) mkdirSync(join(home, d), { recursive: true })
       putPs(w.sb, `  1 claude agents --cwd ${join(home, 'b', 'app')}`, `  2 claude agents --cwd ${join(home, 'a', 'app')}`)
       const plan = await planMigration(rig(w.sb).ctx)
       expect(plan.config.mux.app!.root).toBe('~/a/app')
@@ -374,6 +378,7 @@ describe('planMigration', () => {
     test('o nome do mux do keychain (excluir) vence uma view de mesmo basename', async () => {
       const w = world()
       const home = homeOf(w.sb)
+      mkdirSync(join(home, 'outro', 'berzerk'), { recursive: true })
       putPs(w.sb, `  1 claude agents --cwd ${join(home, 'outro', 'berzerk')}`, VIEW_BK(w.sb))
       const plan = await planMigration(rig(w.sb).ctx)
       expect(plan.config.mux.berzerk!.account).toBe('keychain')
@@ -384,6 +389,7 @@ describe('planMigration', () => {
       const w = world()
       const home = homeOf(w.sb)
       writeFileSync(join(contasOf(w.sb), 'excluir'), `~/p/berzerk\n${join(home, 'p', 'berzerk')}/\n`)
+      mkdirSync(join(home, 'p', 'berzerk', 'sub'), { recursive: true })
       putPs(w.sb, VIEW_BK(w.sb), `  1 claude agents --cwd ${join(home, 'p', 'berzerk', 'sub')}`, `  2 claude agents --cwd ${join(home, 'p', 'berzerk')}`)
       const plan = await planMigration(rig(w.sb).ctx)
       expect(Object.keys(plan.config.mux).sort()).toEqual(['berzerk', 'bk'])
@@ -406,6 +412,33 @@ describe('planMigration', () => {
       const e = await catching(() => planMigration(rig(w.sb).ctx))
       expect(e.exit).toBe(EXIT.USAGE)
       expect(e.message).toContain('view')
+    })
+
+    test('view cujo --cwd não é uma pasta que existe (ex.: caminho com espaço truncado pelo ps) é pulada com aviso: nunca vira raiz de mux nem default', async () => {
+      const w = world()
+      const home = homeOf(w.sb)
+      mkdirSync(join(home, 'Meu'), { recursive: true }) // o ps corta "Meu Projeto" em "Meu"… e aqui a pasta cortada existiria; a view de verdade é outra
+      putPs(w.sb, VIEW_BK(w.sb), `  7 claude agents --cwd ${join(home, 'nao', 'existe')}`, `  8 claude agents --cwd ${join(home, 'p', 'bk', 'arquivo.txt')}`)
+      writeFileSync(join(home, 'p', 'bk', 'arquivo.txt'), 'x') // existe, mas não é pasta
+      const plan = await planMigration(rig(w.sb).ctx)
+      expect(Object.keys(plan.config.mux).sort()).toEqual(['berzerk', 'bk'])
+      expect(plan.warnings.filter((x) => x.includes('pid 7') || x.includes('pid 8')).length).toBe(2)
+      expect(plan.reopen).toEqual(['sb agents bk'])
+
+      // só a inexistente: não há de onde tirar o default
+      putPs(w.sb, `  7 claude agents --cwd ${join(home, 'nao', 'existe')}`)
+      const e = await catching(() => planMigration(rig(w.sb).ctx))
+      expect(e.exit).toBe(EXIT.USAGE)
+    })
+
+    test('só views dentro do keychain: a recusa diz a verdade (há view, mas nenhuma serve de default) e aponta `sb mux set --default`', async () => {
+      const w = world()
+      putPs(w.sb, `  1 claude agents --cwd ${join(homeOf(w.sb), 'p', 'berzerk')}`)
+      const e = await catching(() => planMigration(rig(w.sb).ctx))
+      expect(e.exit).toBe(EXIT.USAGE)
+      expect(e.message).not.toContain('não achei nenhuma view')
+      expect(e.message).toContain('dentro de raízes do keychain')
+      expect(`${e.message}\n${e.detail ?? ''}`).toContain('--default')
     })
 
     test('ativa.json → padrao.json: view no keychain, sem pool', async () => {
@@ -627,6 +660,20 @@ describe('applyMigration', () => {
     const { r, res } = await migrate(w)
     expect(r.kills).toEqual([])
     expect(res.vigia).toBe('none')
+  })
+
+  test('conta.md que é um link: o link vai para o backup como link e sai; o ALVO fica com o mesmo modo e conteúdo', async () => {
+    const w = world()
+    const target = join(homeOf(w.sb), 'dotfiles-conta.md')
+    writeFileSync(target, CONTA_MD, { mode: 0o644 })
+    rmSync(contaMd(w.sb))
+    symlinkSync(target, contaMd(w.sb))
+    const { plan, res } = await migrate(w)
+    expect(res.command).toBe('moved')
+    expect(lstatSync(contaMd(w.sb), { throwIfNoEntry: false })).toBeUndefined()
+    expect(readFileSync(target, 'utf8')).toBe(CONTA_MD)
+    expect(mode(target)).toBe(0o644)
+    expect(lstatSync(join(plan.backup, 'conta.md')).isSymbolicLink()).toBe(true)
   })
 
   test('nada do claude-conta é apagado: contas/ e contas-fixas/ idênticos, e há cópia no backup (700/600, links preservados)', async () => {
@@ -908,6 +955,32 @@ describe('finishMigration', () => {
     expect(existsSync(fixasOf(w.sb))).toBe(true)
   })
 
+  test('recusa se a migração nunca foi aplicada: zshrc ainda com a linha do claude-conta, sem config do sb, sem tokens importados (tudo listado, nada movido)', async () => {
+    const w = world({ noSessions: true }) // nenhuma sessão legacy: só os outros portões
+    const before = snapshot(join(homeOf(w.sb), '.claude', 'contas')).concat(snapshot(fixasOf(w.sb)))
+    const e = await catching(() => finishMigration(rig(w.sb).ctx))
+    expect(e.exit).toBe(EXIT.CHECK_FAILED)
+    const text = `${e.message}\n${e.detail ?? ''}`
+    expect(text).toContain('.zshrc')
+    expect(text).toContain('config')
+    expect(text).toContain('tokens')
+    expect(snapshot(join(homeOf(w.sb), '.claude', 'contas')).concat(snapshot(fixasOf(w.sb)))).toEqual(before)
+    expect(existsSync(contasOf(w.sb))).toBe(true)
+  })
+
+  test('zshrc já trocado mas sem config/tokens do sb (migração pela metade) também recusa; só com a linha do claude-conta a recusa é só dela', async () => {
+    const w = world({ noSessions: true })
+    writeFileSync(join(homeOf(w.sb), '.zshrc'), 'export A=1\n')
+    let e = await catching(() => finishMigration(rig(w.sb).ctx))
+    expect(`${e.message}\n${e.detail ?? ''}`).not.toContain('.zshrc')
+    expect(`${e.message}\n${e.detail ?? ''}`).toContain('config')
+    await migrate(w)
+    writeFileSync(join(homeOf(w.sb), '.zshrc'), `export A=1\n${OLD_LINE}\n`) // o usuário recolocou a linha antiga
+    e = await catching(() => finishMigration(rig(w.sb).ctx))
+    expect(`${e.message}\n${e.detail ?? ''}`).toContain('.zshrc')
+    expect(existsSync(contasOf(w.sb))).toBe(true)
+  })
+
   test('recusa com item migrate na fila, mesmo sem sessão legacy; nunca lê só a lista de sessões', async () => {
     const w = world({ noSessions: true })
     const p = w.sb.paths
@@ -919,6 +992,18 @@ describe('finishMigration', () => {
     expect(e.exit).toBe(EXIT.CHECK_FAILED)
     expect(`${e.message}\n${e.detail ?? ''}`).toContain('a1b2c3d1')
     expect(existsSync(contasOf(w.sb))).toBe(true)
+  })
+
+  test('recusa se o ps falha: sem tabela de processos não dá para dizer que não há view legada', async () => {
+    const w = world({ noSessions: true })
+    await migrate(w)
+    const r = rig(w.sb, { env: { ...w.sb.env, SWITCHBOARD_PS: '/usr/bin/false' } })
+    const e = await catching(() => finishMigration(r.ctx))
+    expect(e.exit).toBe(EXIT.CHECK_FAILED)
+    expect(`${e.message}\n${e.detail ?? ''}`).toContain('ps')
+    expect(existsSync(contasOf(w.sb))).toBe(true)
+    // com o ps de volta passa
+    expect((await finishMigration(rig(w.sb).ctx, { simular: true })).moved.length).toBe(2)
   })
 
   test('recusa com view do claude agents ainda no settings do claude-conta', async () => {
@@ -940,6 +1025,7 @@ describe('finishMigration', () => {
 
   test('sessão SEM state.json (parada, nunca teve flags) não bloqueia o --finish', async () => {
     const w = world({ noSessions: true })
+    await migrate(w) // o --finish exige a migração aplicada (zshrc trocado, config e tokens do sb)
     addSession(w.sb, 'a1b2c3d8', [], 'stopped') // grava o state.json…
     rmSync(stateFile(w.sb, 'a1b2c3d8')) // …e some com ele
     const out = await finishMigration(rig(w.sb).ctx, { simular: true })

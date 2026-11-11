@@ -2,7 +2,7 @@ import { chmodSync, copyFileSync, existsSync, lstatSync, readdirSync, readFileSy
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { editConfig, ensureConfig, loadConfig, parseConfig, type Config, type ConfigEdit } from './config.js'
 import type { Ctx } from './ctx.js'
-import { listViews, psTable } from './doctor.js'
+import { psSnapshot, psTable, viewsIn, listViews } from './doctor.js'
 import { EXIT, SbError } from './errors.js'
 import { isAlive, mkdirPrivate, withLock, writeAtomic } from './fsx.js'
 import { OLD_MARK, slashCommandFile, wrapperFile, zshrcLine, type InstallResult } from './install.js'
@@ -346,6 +346,11 @@ export async function planMigration(ctx: Ctx): Promise<MigrationPlan> {
       warnings.push(`a view do \`claude agents\` (pid ${v.pid}) tem um --cwd relativo: não sei a pasta dela; reabra com \`sb agents <mux>\``)
       continue
     }
+    if (!isDir(norm)) {
+      // ex.: caminho com espaço, que o ps/split corta: a raiz errada viraria um mux (ou o default) que nunca casa com a pasta de verdade
+      warnings.push(`a view do \`claude agents\` (pid ${v.pid}) tem um --cwd que não é uma pasta existente (${tildify(norm, home)}); ignorada (caminho com espaço?); reabra com \`sb agents <mux>\``)
+      continue
+    }
     if (!views.some((x) => x.norm === norm)) views.push({ pid: v.pid, norm })
   }
   views.sort((a, b) => (a.norm < b.norm ? -1 : a.norm > b.norm ? 1 : 0))
@@ -374,10 +379,15 @@ export async function planMigration(ctx: Ctx): Promise<MigrationPlan> {
 
   const def = existing?.default ?? viewMuxes.slice().sort()[0]
   if (def === undefined) {
-    throw usageError(
-      'não achei nenhuma view `claude agents --cwd <pasta>` aberta: sem ela não sei qual mux deve ser o `default` (ele não pode ser o do keychain: toda pasta sem mux cairia no berzerk)',
-      '  abra no cmux o `claude agents` de cada aba e rode `sb migrate --simular` de novo',
-    )
+    throw views.length === 0
+      ? usageError(
+          'não achei nenhuma view `claude agents --cwd <pasta>` aberta (com pasta que exista): sem ela não sei qual mux deve ser o `default` (ele não pode ser o do keychain: toda pasta sem mux cairia no berzerk)',
+          '  abra no cmux o `claude agents` de cada aba e rode `sb migrate --simular` de novo',
+        )
+      : usageError(
+          'a config não tem `default` e nenhuma view aberta serve para criá-lo: elas estão dentro de raízes do keychain (excluir) ou já cobertas por muxes existentes (o `default` não pode ser o mux do keychain)',
+          '  abra o `claude agents` de uma pasta fora do keychain, ou defina o default na config (`sb mux set <nome> --default`), e rode `sb migrate --simular` de novo',
+        )
   }
 
   const raw = {
@@ -393,7 +403,7 @@ export async function planMigration(ctx: Ctx): Promise<MigrationPlan> {
   // sessões: o destino de cada uma sai dos flags dela (a mesma função que o `watch` usa ao aplicar a fila)
   const rewrites: MigrationPlan['rewrites'] = []
   const loaded = loadSessionsWithWarnings(ctx)
-  for (const id of unreadableIds(loaded.warnings)) {
+  for (const id of loaded.unreadable) {
     warnings.push(`sessão ${id}: state.json ilegível; não dá para saber se é do claude-conta (o --finish recusa enquanto ela existir)`)
   }
   for (const s of [...loaded.sessions].sort((a, b) => (a.agent.id < b.agent.id ? -1 : 1))) {
@@ -615,8 +625,7 @@ export async function applyMigration(ctx: Ctx, plan: MigrationPlan, deps: Migrat
     // 8. /conta → backup; o /sb nasce no install
     let command: MigrationResult['command'] = 'absent'
     if (exists(contaMdFile(paths))) {
-      copyFileSync(contaMdFile(paths), join(plan.backup, 'conta.md'))
-      chmodSync(join(plan.backup, 'conta.md'), 0o600)
+      // a cópia (ou o link, copiado como link) já está no backup desde o passo 1; aqui só sai o original, sem seguir link
       rmSync(contaMdFile(paths))
       command = 'moved'
     }
@@ -660,27 +669,36 @@ export interface FinishResult {
 }
 
 /**
- * Ids das sessões cujo `state.json` EXISTE mas não se lê (o adaptador avisa `sessão <id>: …`). Sem `state.json` nenhum a sessão
- * também tem `job: null`, mas ela não tem `respawnFlags` e portanto não aponta para o claude-conta: isso não bloqueia nada.
- */
-function unreadableIds(warnings: string[]): string[] {
-  return warnings.map((w) => /^sessão ([0-9a-f]{8})/.exec(w)?.[1]).filter((id): id is string => id !== undefined)
-}
-
-/**
- * Quem ainda aponta para `~/.claude/contas*`: sessão em segundo plano com `--settings` legado, sessão cujo `state.json` não se
- * lê (não dá para provar que não é legado), pedido `migrate` na fila e view do `claude agents` com o settings do claude-conta.
+ * Quem ainda aponta para `~/.claude/contas*`, ou a migração que ainda não aconteceu — cada linha é um motivo para NÃO mover:
+ *   - a linha `# claude-conta` ainda está no `~/.zshrc` (sem `contas/` o `[ -f … ] && source` pula calado e todo `claude` novo
+ *     roda no keychain: a conta do berzerk);
+ *   - não há config do sb, ou nenhuma conta importada em `tokens/` (a migração evidentemente não foi aplicada);
+ *   - sessão em segundo plano com `--settings` legado; sessão cujo `state.json` EXISTE e não se lê (não dá para provar que não
+ *     é legado; sem `state.json` nenhum ela não tem flags e não conta); pedido `migrate` na fila; view do `claude agents` com o
+ *     settings do claude-conta;
+ *   - o `ps` falhou (sem a tabela não dá para dizer que não há view legada).
  */
 function legacyBlockers(ctx: Ctx): string[] {
+  const { paths } = ctx
   const lines: string[] = []
-  const { sessions, warnings } = loadSessionsWithWarnings(ctx)
+  const zshrc = readIfExists(paths.zshrc) ?? ''
+  if (zshrc.split('\n').some((l) => l.includes(OLD_MARK))) {
+    lines.push(`o ${paths.zshrc} ainda tem a linha "# claude-conta": sem ~/.claude/contas todo \`claude\` novo rodaria no keychain (rode \`sb migrate\`)`)
+  }
+  if (!existsSync(paths.configFile)) lines.push(`não há config do sb (${paths.configFile}): a migração não foi aplicada (rode \`sb migrate\`)`)
+  const legacyNames = legacyAccountNames(paths).filter((n) => NAME_RE.test(n) && n !== KEYCHAIN && readLegacyToken(paths, n) !== null)
+  if (legacyNames.length > 0 && !legacyNames.some((n) => loadSecret(paths, n) !== null)) {
+    lines.push('nenhuma conta do claude-conta foi importada para tokens/ do sb: a migração não foi aplicada (rode `sb migrate`)')
+  }
+  const { sessions, unreadable } = loadSessionsWithWarnings(ctx)
   const legacy = sessions.filter((s) => s.owner.kind === 'legacy').map((s) => s.agent.id)
   if (legacy.length > 0) lines.push(`sessões ainda no settings do claude-conta: ${legacy.join(', ')}`)
-  const unreadable = unreadableIds(warnings)
   if (unreadable.length > 0) lines.push(`sessões com state.json ilegível (não dá para provar que não são do claude-conta; \`claude rm\` as que sobraram): ${unreadable.join(', ')}`)
-  const queued = readRuntime(ctx.paths).pending.filter((i) => i.reason === 'migrate').map((i) => i.jobId)
+  const queued = readRuntime(paths).pending.filter((i) => i.reason === 'migrate').map((i) => i.jobId)
   if (queued.length > 0) lines.push(`sessões vivas na fila da migração (o watch as reescreve quando ficarem livres): ${queued.join(', ')}`)
-  const views = listViews(ctx).filter((v) => ownershipOf(v.args, ctx.paths).kind === 'legacy').map((v) => `pid ${v.pid}`)
+  const ps = psSnapshot(ctx)
+  if (!ps.ok) lines.push('não consegui ler a tabela de processos (`ps` falhou): sem ela não dá para saber se há views do `claude agents` ainda no settings do claude-conta')
+  const views = viewsIn(ctx, ps.rows).filter((v) => ownershipOf(v.args, paths).kind === 'legacy').map((v) => `pid ${v.pid}`)
   if (views.length > 0) lines.push(`views do \`claude agents\` abertas com o settings do claude-conta (reabra com \`sb agents <mux>\`): ${views.join(', ')}`)
   return lines
 }

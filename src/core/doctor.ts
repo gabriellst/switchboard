@@ -268,23 +268,29 @@ function checkSessions(ctx: Ctx, cfg: Config | null, sessions: Session[], add: A
   }
 }
 
-/** Uma linha de `ps -axo pid=,command=`: o pid e a linha de comando inteira (quem usa NUNCA a repete numa saída: pode ter `--settings` inline com token). */
-export function psTable(ctx: Ctx): Array<{ pid: number; command: string }> {
+/**
+ * A tabela de processos de `ps -axo pid=,command=`: o pid e a linha de comando inteira (quem usa NUNCA a repete numa saída:
+ * pode ter `--settings` inline com token). `ok: false` = o `ps` falhou (sem linhas); o doctor trata como "nenhuma", quem não
+ * pode errar para o lado de "nada aberto" (a migração) confere o `ok`.
+ */
+export function psSnapshot(ctx: Ctx): { ok: boolean; rows: Array<{ pid: number; command: string }> } {
   const r = ctx.run(psBin(ctx.env), ['-axo', 'pid=,command='], { timeoutMs: 10_000 })
-  if (r.status !== 0) return []
-  const out: Array<{ pid: number; command: string }> = []
+  if (r.status !== 0) return { ok: false, rows: [] }
+  const rows: Array<{ pid: number; command: string }> = []
   for (const line of r.stdout.split('\n')) {
     const m = /^\s*(\d+)\s+(\S.*)$/.exec(line)
-    if (m) out.push({ pid: Number(m[1]), command: m[2]!.trim() })
+    if (m) rows.push({ pid: Number(m[1]), command: m[2]!.trim() })
   }
-  return out
+  return { ok: true, rows }
 }
 
-/** `claude agents` (a view interativa) vindos de `ps`; a listagem `--json` do próprio sb/watch não é view. */
-export function listViews(ctx: Ctx): Array<{ pid: number; args: string[] }> {
+export const psTable = (ctx: Ctx): Array<{ pid: number; command: string }> => psSnapshot(ctx).rows
+
+/** `claude agents` (a view interativa) entre as linhas do `ps`; a listagem `--json` do próprio sb/watch não é view. */
+export function viewsIn(ctx: Ctx, rows: Array<{ pid: number; command: string }>): Array<{ pid: number; args: string[] }> {
   const names = new Set(['claude', basename(claudeBin(ctx.env))])
   const out: Array<{ pid: number; args: string[] }> = []
-  for (const { pid, command } of psTable(ctx)) {
+  for (const { pid, command } of rows) {
     const tokens = command.split(/\s+/)
     if (!names.has(basename(tokens[0]!)) || tokens[1] !== 'agents') continue
     const args = tokens.slice(2)
@@ -293,6 +299,8 @@ export function listViews(ctx: Ctx): Array<{ pid: number; args: string[] }> {
   }
   return out
 }
+
+export const listViews = (ctx: Ctx): Array<{ pid: number; args: string[] }> => viewsIn(ctx, psTable(ctx))
 
 function checkViews(ctx: Ctx, add: Add): void {
   for (const v of listViews(ctx)) {
