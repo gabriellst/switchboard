@@ -1,6 +1,6 @@
 # switchboard (`sb`) — design
 
-> Status: design aprovado em conversa em 03/11/2026; spikes de sessão feitos (F12–F14), aguardando implementação.
+> Status: **implementado** em 10/11/2026 (16 comandos; `README.md` e `SPEC.md` descrevem o que o código faz). Design aprovado em conversa em 03/11/2026; spikes de sessão feitos (F12–F14). Onde o código diverge deste texto, vale o código: ver §14 (Desvios).
 > Revisão de 03/11 (tarde): **prioridade e hot-swap são por mux, não por conta** [usuário] (§4, §5).
 > Substitui o `~/.local/bin/claude-conta` (Python, 900 linhas) quando estiver pronto.
 > Marcação: **[usuário]** = decidido pelo usuário · **[minha escolha]** = decisão de quem escreveu o
@@ -414,3 +414,47 @@ Histerese do retorno; intervalo do laço do `watch` (o `claude-conta` usa 30 s);
 `--json`; layout do painel em telas estreitas; nomes internos dos módulos; detalhes de
 concorrência entre `watch` e comandos manuais (lock de arquivo); `sb swap --reopen` via `claude respawn` (v2, F14); como o `pin` em segundo plano é
 supervisionado (processo desanexado vs fila do `watch`).
+
+## 14. Desvios (o que a implementação fez diferente do design)
+
+Registrados durante a execução; o `SPEC.md` descreve o comportamento final.
+
+**Comandos que o design não previa**
+- `sb which [pasta]`: o wrapper do zsh o chama; falha com exit 1 se o `claude` ignoraria o settings (falha fechada, F6).
+- `sb watch --once [--json]` (um ciclo e sai), `sb install --simular`, `sb migrate --finish [--simular]`.
+- `sb accounts`, `sb attach`, `sb detach`, `sb login --attach` (já em §7, de 03/11 tarde).
+
+**Troca de conta**
+- O algoritmo de §4 foi revisto na execução (reserva atual que ainda serve é mantida; `unknown` nunca empurra sozinho; override esgotado vira regra normal) e é o do `desiredAccount`; o `SPEC.md` §5.2 o descreve passo a passo.
+- Histerese do retorno: margem fixa de 0,10 abaixo do limite nas duas janelas (ou reset passado); não é configurável.
+- Cooldown de 5 minutos entre duas trocas automáticas do mesmo mux (salvo conta atual esgotada); no máximo 3 `claude stop` por ciclo do `watch`, com recuo quando uma parada falha. Não estavam no design.
+- `swap.auto: false` faz o `watch` só avisar, uma vez por destino.
+- O `watch` conclui uma troca interrompida (link já na conta nova, `since` não gravado) e move um `runtime.json` corrompido para o lado em vez de travar.
+- Sessão viva cujo `state.json` não tem `inFlight` (claude antigo) conta como ocupada e nunca é reiniciada pelo `sb`; sessão com trabalho agendado nunca é parada.
+- A troca manual vale até o `fiveHour.resetsAt` da preferida (ou agora + 5 h sem medição); mux sem pool não guarda override.
+
+**Pin e fila**
+- Pin/unpin de sessão ocupada não usa um processo desanexado: o pedido vai para `runtime.pending` e o `watch` aplica; o comando avisa se o `watch` não está rodando.
+- Pedidos `adopt` (do `doctor --fix`) e `migrate` usam a mesma fila, e o destino é sempre recalculado a partir dos flags da sessão.
+
+**Integrações**
+- `sb run` e o wrapper põem `--settings` antes do primeiro `--` solto; uma flag com valor logo antes do `--` engole o `--settings`.
+- Ordem do wrapper: subcomando de manutenção primeiro (sempre sem o token herdado), depois "dentro de uma sessão", depois `--settings` explícito; a linha do `~/.zshrc` tem um `else` que define um `claude()` recusando se o wrapper sumir.
+- `sb install` grava o caminho absoluto do runtime (o do `PATH` que resolve para o mesmo binário): se o node mudar de lugar, rode de novo.
+- O CLI ignora flags desconhecidas (citty); só subcomando desconhecido falha (exit 1).
+- O lock do `watch` espera 250 ms (um lock de pid morto só é tomado depois do prazo); `sb usage` espera 1,5 s e cai na última medição.
+
+**`doctor`**
+- Códigos além dos de §9: `state.perms`, `account.unattached`, `link.orphan`, `session.legacy`, `session.foreign`, `view.legacy`, `claude.format`, `config.invalid`, `config.no-token`.
+- Uma view com `--settings` em `pins/` é aceita.
+
+**Migração**
+- `sb migrate` **copia** o legado para `backup/migrate-<data>/` e só `--finish` o **move** (para `backup/finish-<data>/`), e só quando nada mais aponta para lá.
+- Exige ao menos uma view `claude agents --cwd` aberta ou um `default` na config (o `default` nunca é o mux do keychain); recusa com exit 3 senão.
+- Já roda o `sb install`. O `--simular` só acusa duplicatas pelo token idêntico; ao aplicar, também pela medição de uso.
+- Não toca `~/.local/bin/claude-conta`.
+
+**Ainda em aberto**
+- F12: o item `queued` de uma sessão presa por limite roda de novo com o token novo? Só o primeiro uso real do `watch` responde.
+- Reabrir sessão por comando (`sb swap --reopen` via `claude respawn`) segue fora da v1 (F14).
+
