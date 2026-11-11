@@ -75,7 +75,7 @@ São restrições, não suposições. O texto completo está no design (§3) e n
 - **Resultado**: `ok` (duas janelas `{utilization 0–1, resetsAt epoch s, status}`, mais `status` e
   `resetsAt` gerais) ou erro: `dead-token` (401/403), `rate-limited` (429), `network`, `unexpected`,
   e `no-token` (conta sem token; sem rede). Cabeçalhos incompletos mantêm o sinal HTTP.
-- **Cache**: `sb usage` e `sb accounts` reaproveitam medições de até 60 s; o `watch` sonda quando a
+- **Cache**: `sb usage` reaproveita medições de até 60 s (`sb accounts` nunca mede: só lê o `usage.json`); o `watch` sonda quando a
   medição mais nova passa de `swap.probeEvery`, ou há conta nunca medida. `no-token` não fica preso
   no cache. Medição com idade negativa (relógio voltou) não vale como cache.
 - **Duplicatas**: duas contas com a mesma impressão (`5h-reset`, `7d-reset`, `5h-utilization`,
@@ -256,7 +256,10 @@ Variáveis de ambiente: `HOME` (tudo parte dele, não de `os.homedir()`), `XDG_C
   logo antes do spawn, e roda o `claude` com stdio herdado e `cleanEnv` (F10). `agents` →
   `claude agents --cwd <root> --settings <link>`; `run` → `claude <args> --settings <link>` com o
   `--settings` **antes do primeiro `--` solto** (depois dele tudo é posicional e o `claude` rodaria
-  no keychain); `--settings` do usuário antes do `--` é recusado (exit 3). SIGINT/SIGTERM/SIGHUP são
+  no keychain); `--settings` do usuário antes do `--` é recusado (exit 3), assim como qualquer outra
+  opção antes do `--` em `sb run` (`splitRunArgs`: o CLI ignora flags desconhecidas, o `run` não).
+  Resíduo: uma flag com valor imediatamente antes do `--` solto (`--model -- texto`) engole o
+  `--settings` inserido (erro de digitação do comando; vale também para o wrapper). SIGINT/SIGTERM/SIGHUP são
   repassados (com terminal, o Ctrl+C já chega ao filho); o `sb` sai com o código ou o sinal do `claude`.
   Link ausente, quebrado, JSON inválido ou sem `CLAUDE_CODE_OAUTH_TOKEN` → exit 1, o `claude` não abre.
 - **`checkSettingsTarget`**: o link tem que ser symlink, o alvo real um arquivo em `<estado>/tokens`,
@@ -314,10 +317,10 @@ O CLI ignora flags desconhecidas (comportamento do citty) e só falha em subcoma
 
 | Código | Quando |
 |---|---|
-| `1` | `doctor` com erro; `which`/`agents`/`run` com link ou token inválido; `swap` sem alternativa ou com parada que falhou; `claude stop` que falhou ao fixar; login cujo token não autenticou; `install` com `launchctl` falho ou linha do zshrc diferente; `migrate` com `sb install` problemático; `migrate --finish` recusado; `runtime.json` corrompido num comando manual; erro inesperado; subcomando desconhecido |
+| `1` | `doctor` com erro; `which`/`agents`/`run` com link ou token inválido; `swap` sem alternativa ou com parada que falhou; `claude stop` que falhou ao fixar; login cujo token não autenticou, que não capturou token (o `setup-token` saiu com 0 sem entregá-lo) ou que foi interrompido por sinal; `install` com `launchctl` falho ou linha do zshrc diferente; `migrate` com `sb install` problemático; `migrate --finish` recusado; `runtime.json` corrompido num comando manual; erro inesperado; subcomando desconhecido |
 | `2` | config ausente ou inválida; `doctor` com `config.invalid`; pasta fora de todo root sem `default` |
 | `3` | nome inválido, mux/conta/sessão inexistente ou recusada pelas regras (`accounts`, destino igual, prefixo ambíguo), opções incompatíveis, argumento a mais, `--json` do `watch` sem `--once`, conta sem token, `migrate` sem o que migrar |
-| `4` | `claude` ausente, `claude agents --json` com formato inesperado, `state.json` de formato novo, `setup-token` sem token ou passado de 15 min |
+| `4` | `claude` ausente ou que não executa, `claude agents --json` que falha ou tem formato inesperado, `state.json` de formato novo, `claude setup-token` que sai com código ≠ 0 ou passa de 15 min |
 | `5` | outro `sb` segura o lock; segundo `sb watch`; login em andamento; `watch --once` com o lock ocupado |
 
 `sb agents` e `sb run` saem com o código do `claude` (ou `128+n` / o mesmo sinal). `sb usage` nunca

@@ -24,7 +24,7 @@ rodando, e interromper o trabalho para trocar de conta seria pior que o limite.
 ## Instalação
 
 Ainda não está publicado (nem no npm, nem em Release): a instalação é local, a partir da pasta do
-projeto. Requer Node ≥ 20 (ou bun) e o `claude` no `PATH`. Foi feito para macOS: o `sb watch` roda
+projeto. Para **compilar** precisa do bun (`bun run build`); o CLI compilado roda em Node ≥ 20 puro. Precisa do `claude` no `PATH`. Foi feito para macOS: o `sb watch` roda
 como LaunchAgent, as notificações usam `osascript` e o login usa o `script` do sistema.
 
 ```bash
@@ -53,6 +53,9 @@ sb agents app                        # em cada aba do cmux: `claude agents` com 
 sb                                   # o painel de uso
 sb install                           # watch em segundo plano, wrapper do zsh e comando /sb
 ```
+
+Se o `~/.zshrc` ainda tem a linha `# claude-conta`, o `sb install` não mexe nele e manda rodar
+`sb migrate` (veja "Migrar do `claude-conta`").
 
 - `sb login` roda o `claude setup-token` num pseudo-terminal com um diretório de config temporário
   (nunca toca o keychain), valida o token com uma sonda de 1 token e só então grava. Sem terminal
@@ -214,12 +217,15 @@ rodando). Depois é só reabrir a sessão. Só mexe em sessões em segundo plano
   quebrado, token com JSON inválido), o wrapper recusa e **não** chama o `claude`: sem settings ele
   cairia no keychain, calado. Subcomandos de manutenção (`auth`, `stop`, `rm`, `mcp`,
   `setup-token`…) e `--settings` explícito passam direto; dentro de uma sessão o filho herda a conta
-  dela. O wrapper nunca repassa um `CLAUDE_CODE_OAUTH_TOKEN` herdado;
+  dela (e mantém o token dela). Fora de uma sessão do Claude o wrapper nunca repassa um
+  `CLAUDE_CODE_OAUTH_TOKEN` herdado, e os subcomandos de manutenção nunca o recebem, nem dentro de uma sessão;
 - o comando **`/sb`** em `~/.claude/commands/sb.md` (`/sb`, `/sb swap app`, `/sb pin a1b2 trabalho`,
   `/sb accounts`…), que chama o `sb` (ele precisa estar no `PATH`). Um `/sb swap` ou `/sb pin` feito
   de dentro de uma sessão do mux nunca para a sessão que chamou: ela fica na espera.
 
-`sb install --simular` mostra o que faria. É idempotente. Ele grava o **caminho absoluto do
+`sb install --simular` mostra o que faria. É idempotente. Se o `~/.zshrc` ainda tem a linha
+`# claude-conta`, ele **não** mexe nele (dois wrappers brigariam) e manda rodar `sb migrate`: quem
+vem do `claude-conta` migra primeiro. Ele grava o **caminho absoluto do
 runtime** (node ou bun) no plist e no wrapper: se o node mudar de lugar, rode `sb install` de novo.
 Para rodar o `watch` à mão: `sb watch` (só um por máquina; `sb watch --once [--json]` faz um ciclo e
 sai). O log é `<estado>/log/watch.log`.
@@ -232,7 +238,8 @@ hora, as vivas pela fila do `watch`). `--json` imprime `{ findings, fixes? }`.
 
 - **Erros** (exit 1): link de mux ou pin quebrado; token com JSON inválido (o `claude` ignoraria o
   settings e cairia no keychain); token sem `CLAUDE_CODE_OAUTH_TOKEN`; token morto (401); permissão
-  do token fora de 600; sessão sob o root de um mux sem `--settings`; view `claude agents` aberta sem
+  do token fora de 600; sessão sob o root de um mux sem `--settings` (menos num mux cuja conta atual
+  é o `keychain`, onde rodar sem settings é o esperado); view `claude agents` aberta sem
   o settings do `sb`; conta registrada sem token; config inválida (exit 2).
 - **Avisos**: `watch` parado; preferida fora do pool; contas duplicadas no mesmo pool; conta
   sem mux; sessões do `claude-conta` ou de terceiros; links órfãos; estado fora de 700.
@@ -333,8 +340,9 @@ Limites conhecidos:
   `doctor`) em vez de adivinhar.
 - O `sb run` e o wrapper colocam `--settings` **antes do primeiro `--` solto**; uma flag com valor
   logo antes do `--` (`--model -- texto`) engole o `--settings`. É erro de digitação do comando.
-- O `sb` ignora flags desconhecidas (`sb usage --bogus` roda normalmente); só um subcomando
-  desconhecido dá erro (exit 1).
+- O parser ignora flags desconhecidas (`sb usage --bogus` roda normalmente); só um subcomando
+  desconhecido dá erro (exit 1). Exceção: `sb run` recusa (exit 3) qualquer opção desconhecida antes
+  do `--` e também `--settings`/`--settings=` antes do `--`.
 - É de um usuário só e não está publicado. Usar várias assinaturas e alternar por limite é decisão
   sua; confira os termos do plano.
 
