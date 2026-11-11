@@ -232,7 +232,9 @@ vem do `claude-conta` migra primeiro. Ele grava o **caminho absoluto do
 runtime** (node ou bun) no plist e no wrapper: se o node mudar de lugar, rode `sb install` de novo. O
 plist também leva os caminhos de config, estado e jobs que o `sb install` está usando
 (`SWITCHBOARD_CONFIG`, `SWITCHBOARD_STATE_DIR`, `SWITCHBOARD_JOBS_DIR`, já resolvidos com `XDG_*`):
-mudou uma dessas variáveis no shell? rode `sb install` de novo.
+mudou uma dessas variáveis no shell? rode `sb install` de novo. Os caminhos entram absolutos (um valor relativo
+vale contra a pasta atual) e o `sb install` (texto, `--json` e `--simular`) imprime config, estado e jobs que o `watch`
+vai usar; se o plist que já existia apontava o `watch` para outro lugar, avisa `antes → depois` (aviso, exit 0).
 Para rodar o `watch` à mão: `sb watch` (só um por máquina; `sb watch --once [--json]` faz um ciclo e
 sai). O log é `<estado>/log/watch.log`.
 

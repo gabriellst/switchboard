@@ -280,7 +280,9 @@ Variáveis de ambiente: `HOME` (tudo parte dele, não de `os.homedir()`), `XDG_C
 - **LaunchAgent** `com.gabriellst.switchboard.watch`: `RunAtLoad`, `KeepAlive`, `ThrottleInterval 30`,
   `PATH` com o diretório do `claude`, `HOME` e os caminhos **resolvidos** de quem instalou
   (`SWITCHBOARD_CONFIG`, `SWITCHBOARD_STATE_DIR`, `SWITCHBOARD_JOBS_DIR`: com `XDG_*` ou `SWITCHBOARD_*` no shell, o
-  `watch` usa o mesmo estado que o CLI; nunca os seams de teste nem token); carregado com `launchctl bootstrap gui/<uid>` (`bootout` antes;
+  `watch` usa o mesmo estado que o CLI; nunca os seams de teste nem token; sempre absolutos). O `sb install` mostra esses três caminhos (`watch` no
+  `--json`) e, se o plist existente tinha outros (ou, sem a chave, o padrão do HOME dele), lista `antes → depois` em
+  `watchChanged` e como aviso (exit 0); carregado com `launchctl bootstrap gui/<uid>` (`bootout` antes;
   3 tentativas). O runtime gravado é o caminho estável do node/bun (a entrada do `PATH` que resolve
   para o mesmo binário).
 - **`/sb`**: `~/.claude/commands/sb.md`, `!sb $ARGUMENTS 2>&1`, `allowed-tools: Bash(sb:*)`,

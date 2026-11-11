@@ -1,11 +1,12 @@
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { expect, test } from 'bun:test'
 import type { Ctx } from '../src/core/ctx.js'
 import { SbError } from '../src/core/errors.js'
 import { findClaudeDir, LAUNCH_LABEL, stableRuntime, planInstall, plistFile, runInstall, slashCommandFile, wrapperFile } from '../src/core/install.js'
 import { muxLink, resolvePaths } from '../src/core/paths.js'
+import { renderInstall } from '../src/report.js'
 import { FAKE_TOKEN, filesUnder, populatedSandbox, sandbox, type Sandbox } from './helpers.js'
 
 const CLI = join(import.meta.dir, '..', 'src', 'cli.ts')
@@ -110,6 +111,103 @@ test('plist: `sb install` de verdade (subprocesso, launchctl falso) grava os tr�
   expect(e.SWITCHBOARD_JOBS_DIR).toBe(sb.env.SWITCHBOARD_JOBS_DIR!)
   for (const seam of ['SWITCHBOARD_CLAUDE', 'SWITCHBOARD_API_BASE', 'SWITCHBOARD_PS', 'SWITCHBOARD_NO_NOTIFY', 'CLAUDE_CODE_OAUTH_TOKEN']) expect(text).not.toContain(seam)
   expect(text).not.toMatch(/sk-ant-/)
+})
+
+test('plist: os três caminhos entram ABSOLUTOS (valor relativo é resolvido contra a pasta de quem instala)', () => {
+  const sb = sandbox()
+  const rel = { ...sb.paths, configFile: 'rel/config.jsonc', stateDir: './rel-state', jobsDir: '../rel-jobs' }
+  const plist = byFile(planInstall(rel, { runtimeBin: process.execPath, cliPath: CLI, claudeDir: join(sb.dir, 'claude-bin') }), plistFile(rel))
+  mkdirSync(join(plist.file, '..'), { recursive: true })
+  writeFileSync(plist.file, plist.content)
+  const e = plistAsJson(plist.file).EnvironmentVariables as Record<string, string>
+  expect(e.SWITCHBOARD_CONFIG).toBe(resolve('rel/config.jsonc'))
+  expect(e.SWITCHBOARD_STATE_DIR).toBe(resolve('./rel-state'))
+  expect(e.SWITCHBOARD_JOBS_DIR).toBe(resolve('../rel-jobs'))
+  for (const k of ['SWITCHBOARD_CONFIG', 'SWITCHBOARD_STATE_DIR', 'SWITCHBOARD_JOBS_DIR']) expect(e[k]!.startsWith('/')).toBe(true)
+})
+
+// --- o que o `sb install` mostra sobre os caminhos do watch --------------------------------------
+
+const OTHER = (sb: Sandbox) => ({ ...sb.paths, configFile: join(sb.dir, 'outra', 'config.jsonc'), stateDir: join(sb.dir, 'outra', 'state'), jobsDir: join(sb.dir, 'outra', 'jobs') })
+
+test('install informa os caminhos que o watch vai usar (resultado, texto e --simular)', () => {
+  const sb = sandbox()
+  const res = runInstall(sb.ctx({ run: fakeRun().run }), planFor(sb), { simular: false })
+  expect(res.watch).toEqual({ config: sb.paths.configFile, state: sb.paths.stateDir, jobs: sb.paths.jobsDir })
+  expect(res.watchChanged).toEqual([])
+  const text = renderInstall(res, sb.paths.home)
+  for (const v of [sb.paths.configFile, sb.paths.stateDir, sb.paths.jobsDir]) expect(text).toContain(v)
+  expect(text).not.toMatch(/→|mudou/)
+  const sim = runInstall(sb.ctx({ run: fakeRun().run }), planFor(sb), { simular: true })
+  expect(sim.watch).toEqual(res.watch)
+  expect(renderInstall(sim, sb.paths.home)).toContain(sb.paths.stateDir)
+})
+
+test('plist existente com outro config/estado/jobs: avisa com antes → depois (exit 0, o plist é reescrito); igual não avisa', () => {
+  const sb = sandbox()
+  const old = OTHER(sb)
+  runInstall(sb.ctx({ run: fakeRun().run }), planInstall(old, { runtimeBin: process.execPath, cliPath: CLI, claudeDir: join(sb.dir, 'claude-bin') }), { simular: false })
+  // o `plistFile` depende só de launchAgentsDir (igual nos dois): o plist velho está no lugar que o novo vai ocupar
+  const res = runInstall(sb.ctx({ run: fakeRun().run }), planFor(sb), { simular: false })
+  expect(res.watchChanged).toEqual([
+    { key: 'SWITCHBOARD_CONFIG', from: old.configFile, to: sb.paths.configFile },
+    { key: 'SWITCHBOARD_STATE_DIR', from: old.stateDir, to: sb.paths.stateDir },
+    { key: 'SWITCHBOARD_JOBS_DIR', from: old.jobsDir, to: sb.paths.jobsDir },
+  ])
+  const text = renderInstall(res, sb.paths.home)
+  expect(text).toContain(`${old.stateDir} → ${sb.paths.stateDir}`)
+  expect(text).toContain(`${old.configFile} → ${sb.paths.configFile}`)
+  expect(text).toContain(`${old.jobsDir} → ${sb.paths.jobsDir}`)
+  expect(text).toMatch(/⚠/)
+  expect(plistAsJson(plistFile(sb.paths)).EnvironmentVariables).toMatchObject({ SWITCHBOARD_STATE_DIR: sb.paths.stateDir })
+  // de novo, agora igual: nenhum aviso
+  expect(runInstall(sb.ctx({ run: fakeRun().run }), planFor(sb), { simular: false }).watchChanged).toEqual([])
+  // --simular também avisa (não grava)
+  runInstall(sb.ctx({ run: fakeRun().run }), planInstall(old, { runtimeBin: process.execPath, cliPath: CLI, claudeDir: join(sb.dir, 'claude-bin') }), { simular: false }) // volta o plist velho
+  const sim = runInstall(sb.ctx({ run: fakeRun().run }), planFor(sb), { simular: true })
+  expect(sim.watchChanged.map((c) => c.key)).toEqual(['SWITCHBOARD_CONFIG', 'SWITCHBOARD_STATE_DIR', 'SWITCHBOARD_JOBS_DIR'])
+  expect(plistAsJson(plistFile(sb.paths)).EnvironmentVariables).toMatchObject({ SWITCHBOARD_STATE_DIR: old.stateDir })
+})
+
+test('plist de antes desta versão (sem os caminhos): valia o padrão do HOME; só avisa se o novo for outro', () => {
+  const sb = sandbox()
+  const legacy = `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/bin</string><key>HOME</key><string>${sb.paths.home}</string></dict></dict></plist>\n`
+  mkdirSync(join(plistFile(sb.paths), '..'), { recursive: true })
+  writeFileSync(plistFile(sb.paths), legacy)
+  const def = resolvePaths({ HOME: sb.paths.home })
+  const same = runInstall(sb.ctx({ run: fakeRun().run }), planInstall(def, { runtimeBin: process.execPath, cliPath: CLI, claudeDir: '/c' }), { simular: true })
+  expect(same.watchChanged).toEqual([]) // o estado do sandbox NÃO é o padrão, mas aqui o ctx/paths é o padrão: nada mudou
+  const res = runInstall(sb.ctx({ run: fakeRun().run }), planFor(sb), { simular: true })
+  expect(res.watchChanged).toContainEqual({ key: 'SWITCHBOARD_STATE_DIR', from: def.stateDir, to: sb.paths.stateDir })
+})
+
+test('sb install (subprocesso): --json e texto trazem os caminhos; rodar de outro estado avisa antes → depois e sai 0', () => {
+  const sb = sandbox()
+  const shimDir = join(sb.dir, 'shim')
+  mkdirSync(shimDir, { recursive: true })
+  writeFileSync(join(shimDir, 'launchctl'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  const env = { PATH: `${shimDir}:${process.env.PATH ?? '/usr/bin:/bin'}` }
+  const first = sb.runSb(['install', '--json'], { env })
+  expect(first.code).toBe(0)
+  const j = JSON.parse(first.stdout)
+  expect(j.watch).toEqual({ config: sb.env.SWITCHBOARD_CONFIG, state: sb.env.SWITCHBOARD_STATE_DIR, jobs: sb.env.SWITCHBOARD_JOBS_DIR })
+  expect(j.watchChanged).toEqual([])
+  // outro CONFIG (o estado e a linha do zshrc seguem iguais): aviso antes → depois, exit 0
+  const newConfig = join(sb.dir, 'config-nova', 'config.jsonc')
+  const second = sb.runSb(['install'], { env: { ...env, SWITCHBOARD_CONFIG: newConfig } })
+  expect(second.code).toBe(0)
+  expect(second.stdout).toContain(`SWITCHBOARD_CONFIG mudou: ${sb.env.SWITCHBOARD_CONFIG} → ${newConfig}`)
+  expect(second.stdout).toContain(`config ${newConfig}`)
+  // --simular a partir do shell de sempre: aponta a volta (e não grava)
+  const sim = sb.runSb(['install', '--simular', '--json'], { env })
+  expect(sim.code).toBe(0)
+  expect(JSON.parse(sim.stdout).watchChanged).toEqual([{ key: 'SWITCHBOARD_CONFIG', from: newConfig, to: sb.env.SWITCHBOARD_CONFIG }])
+  expect(plistAsJson(plistFile(sb.paths)).EnvironmentVariables).toMatchObject({ SWITCHBOARD_CONFIG: newConfig })
+  // outro ESTADO também é mostrado (o exit 1 aqui é da linha do zshrc, que é de outro estado: comportamento que já existia)
+  const newState = join(sb.dir, 'estado-novo')
+  const third = sb.runSb(['install'], { env: { ...env, SWITCHBOARD_STATE_DIR: newState } })
+  expect(third.stdout).toContain(`SWITCHBOARD_STATE_DIR mudou: ${sb.env.SWITCHBOARD_STATE_DIR} → ${newState}`)
+  expect(first.stdout + second.stdout + sim.stdout + third.stdout).not.toMatch(/sk-ant-/)
 })
 
 test('plist: caminhos com & < > " \' e espaço saem escapados e o XML continua válido', () => {

@@ -1,9 +1,9 @@
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
-import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { Ctx } from './ctx.js'
 import { EXIT, SbError } from './errors.js'
 import { mkdirPrivate, writeAtomic } from './fsx.js'
-import type { Paths } from './paths.js'
+import { resolvePaths, type Paths } from './paths.js'
 
 export const LAUNCH_LABEL = 'com.gabriellst.switchboard.watch'
 
@@ -37,12 +37,31 @@ export function shQuote(s: string): string {
 
 const xmlEscape = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
 
+const WATCH_KEYS = ['SWITCHBOARD_CONFIG', 'SWITCHBOARD_STATE_DIR', 'SWITCHBOARD_JOBS_DIR'] as const
+type WatchKey = (typeof WATCH_KEYS)[number]
+
+/** Os três caminhos que o `watch` recebe, sempre ABSOLUTOS (um valor relativo vale contra a pasta de quem instala, agora). */
+export function watchEnvOf(p: Paths): Record<WatchKey, string> {
+  return { SWITCHBOARD_CONFIG: resolve(p.configFile), SWITCHBOARD_STATE_DIR: resolve(p.stateDir), SWITCHBOARD_JOBS_DIR: resolve(p.jobsDir) }
+}
+
+const xmlUnescape = (s: string): string => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
+
+/** `EnvironmentVariables` de um plist (só pares chave/string, do jeito que o `plistContent` os escreve). */
+function plistEnv(content: string): Record<string, string> {
+  const dict = /<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/.exec(content)?.[1] ?? ''
+  const out: Record<string, string> = {}
+  for (const m of dict.matchAll(/<key>([^<]*)<\/key>\s*<string>([^<]*)<\/string>/g)) out[xmlUnescape(m[1]!)] = xmlUnescape(m[2]!)
+  return out
+}
+
 /**
  * O ambiente do `watch` sob o launchd: PATH, HOME e os caminhos RESOLVIDOS de quem instala (config, estado, jobs). Sem eles, um
  * `XDG_STATE_HOME`/`SWITCHBOARD_*` do shell faria o CLI e o wrapper usarem um estado e o `watch` outro. Nunca vão para cá os
  * seams de teste (`SWITCHBOARD_CLAUDE`, `_API_BASE`, `_PS`, `_NO_NOTIFY`) nem token.
  */
 function plistContent(p: Paths, o: InstallPlanOptions): string {
+  const watchEnv = watchEnvOf(p)
   const pathDirs = [...new Set([o.claudeDir, dirname(o.runtimeBin), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'])]
   const log = join(p.stateDir, 'log', 'watch.out')
   const str = (s: string): string => `<string>${xmlEscape(s)}</string>`
@@ -74,12 +93,7 @@ function plistContent(p: Paths, o: InstallPlanOptions): string {
     ${str(pathDirs.join(delimiter))}
     <key>HOME</key>
     ${str(p.home)}
-    <key>SWITCHBOARD_CONFIG</key>
-    ${str(p.configFile)}
-    <key>SWITCHBOARD_STATE_DIR</key>
-    ${str(p.stateDir)}
-    <key>SWITCHBOARD_JOBS_DIR</key>
-    ${str(p.jobsDir)}
+${WATCH_KEYS.map((k) => `    <key>${k}</key>\n    ${str(watchEnv[k])}`).join('\n')}
   </dict>
 </dict>
 </plist>
@@ -208,6 +222,10 @@ export type LaunchdStatus = 'loaded' | 'failed' | 'skipped'
 
 export interface InstallResult {
   simular: boolean
+  /** config, estado e jobs que o `watch` vai usar (os que o plist leva) */
+  watch: { config: string; state: string; jobs: string }
+  /** o plist que já existia apontava o `watch` para OUTRO config/estado/jobs: antes → depois (aviso; não é erro) */
+  watchChanged: Array<{ key: string; from: string; to: string }>
   files: Array<{ file: string; status: FileStatus }>
   zshrc: { file: string; line: string; status: ZshrcStatus }
   launchd: { status: LaunchdStatus; domain: string; error?: string }
@@ -253,6 +271,33 @@ function zshrcAction(text: string | undefined, line: string): 'append' | Exclude
 }
 
 /**
+ * Os caminhos que o plist NOVO dá ao `watch` e o que mudou em relação ao plist que já está lá (lido ANTES de gravar). Chave
+ * que o plist velho não tinha (instalado antes desta versão) valia o padrão do HOME dele (o launchd não tem `XDG_*`).
+ */
+function watchPlan(ctx: Ctx, plan: InstallFile[]): Pick<InstallResult, 'watch' | 'watchChanged'> {
+  const plist = plistFile(ctx.paths)
+  const fresh = { ...watchEnvOf(ctx.paths), ...plistEnv(plan.find((f) => f.file === plist)?.content ?? '') }
+  const watch = { config: fresh.SWITCHBOARD_CONFIG, state: fresh.SWITCHBOARD_STATE_DIR, jobs: fresh.SWITCHBOARD_JOBS_DIR }
+  const old = readIfExists(plist)
+  const watchChanged: InstallResult['watchChanged'] = []
+  if (old === undefined) return { watch, watchChanged }
+  const before = plistEnv(old)
+  let defaults: Record<WatchKey, string> | undefined
+  if (before.HOME) {
+    try {
+      defaults = watchEnvOf(resolvePaths({ HOME: before.HOME }))
+    } catch {
+      // HOME inválido no plist velho: sem padrão para comparar
+    }
+  }
+  for (const k of WATCH_KEYS) {
+    const from = before[k] ?? defaults?.[k]
+    if (from !== undefined && from !== fresh[k]) watchChanged.push({ key: k, from, to: fresh[k] })
+  }
+  return { watch, watchChanged }
+}
+
+/**
  * Grava os arquivos do plano, liga a linha no `~/.zshrc` (uma vez) e (re)carrega o LaunchAgent via `ctx.run`.
  * `simular`: só calcula o que faria. Erro do launchctl não lança: sai em `launchd.status = 'failed'` para o comando
  * mostrar o resto do resultado. Idempotente: arquivo igual não é regravado.
@@ -270,6 +315,7 @@ export function runInstall(ctx: Ctx, plan: InstallFile[], o: RunInstallOptions):
     mkdirPrivate(paths.stateDir)
     mkdirPrivate(join(paths.stateDir, 'log'))
   }
+  const { watch, watchChanged } = watchPlan(ctx, plan)
   const files = plan.map(({ file, content, mode }) => {
     const same = readIfExists(file) === content && (statSync(file).mode & 0o777) === mode
     if (o.simular) return { file, status: (same ? 'unchanged' : 'would-write') as FileStatus }
@@ -292,7 +338,7 @@ export function runInstall(ctx: Ctx, plan: InstallFile[], o: RunInstallOptions):
   }
   const zshrc = { file: paths.zshrc, line, status: zStatus }
 
-  if (o.simular) return { simular: true, files, zshrc, launchd: { status: 'skipped', domain } }
+  if (o.simular) return { simular: true, watch, watchChanged, files, zshrc, launchd: { status: 'skipped', domain } }
 
   const plist = plistFile(paths)
   ctx.run('launchctl', ['bootout', `${domain}/${LAUNCH_LABEL}`]) // não carregado → erro esperado, ignorado
@@ -303,8 +349,8 @@ export function runInstall(ctx: Ctx, plan: InstallFile[], o: RunInstallOptions):
     if (i > 0) sleep(BOOTSTRAP_WAIT_MS)
     const r = ctx.run('launchctl', ['bootstrap', domain, plist])
     last = { status: r.status, stderr: r.stderr }
-    if (r.status === 0) return { simular: false, files, zshrc, launchd: { status: 'loaded', domain } }
+    if (r.status === 0) return { simular: false, watch, watchChanged, files, zshrc, launchd: { status: 'loaded', domain } }
   }
   const why = last.stderr.replace(TOKEN_RE, '<token>').trim() || `exit ${last.status ?? 'sem status'}`
-  return { simular: false, files, zshrc, launchd: { status: 'failed', domain, error: why } }
+  return { simular: false, watch, watchChanged, files, zshrc, launchd: { status: 'failed', domain, error: why } }
 }

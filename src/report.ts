@@ -273,6 +273,8 @@ export function renderInstall(r: InstallResult, home: string): string {
   const verb: Record<InstallResult['files'][number]['status'], string> = { written: 'gravado', unchanged: 'já estava igual', 'would-write': 'seria gravado' }
   const lines = r.simular ? ['Simulação: nada foi gravado e o launchctl não foi chamado.'] : []
   for (const f of r.files) lines.push(`${short(f.file)}  (${verb[f.status]})`)
+  lines.push(`o watch ${r.simular ? 'passaria a usar' : 'usa'}: config ${short(r.watch.config)} · estado ${short(r.watch.state)} · jobs ${short(r.watch.jobs)}`)
+  for (const c of r.watchChanged) lines.push(`⚠ ${c.key} mudou: ${short(c.from)} → ${short(c.to)} (o watch ${r.simular ? 'passaria a olhar' : 'passa a olhar'} outro lugar; se não foi de propósito, rode \`sb install\` do shell de sempre)`)
   const z = r.zshrc
   const file = short(z.file)
   if (z.status === 'claude-conta') lines.push(`${file}: tem a linha do claude-conta; não mexi. Rode \`sb migrate\` para trocar pelo switchboard.`)
