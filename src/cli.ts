@@ -24,6 +24,7 @@ const main = defineCommand({
     pin: () => import('./commands/pin.js').then((m) => m.default),
     unpin: () => import('./commands/unpin.js').then((m) => m.default),
     watch: () => import('./commands/watch.js').then((m) => m.default),
+    install: () => import('./commands/install.js').then((m) => m.default),
   },
 })
 

@@ -1,3 +1,4 @@
+import type { InstallResult } from './core/install.js'
 import type { AccountInfo, MuxMembership, PanelData } from './core/panel.js'
 import type { Measurement } from './core/usage.js'
 import type { TickReport } from './core/watch.js'
@@ -260,5 +261,23 @@ export function renderTick(r: TickReport): string {
   for (const p of r.pending) lines.push(p.result === 'queued' ? `fila: sessão ${p.jobId} ainda espera` : `fila: sessão ${p.jobId} ${p.result === 'gone' ? 'descartada' : p.result}`)
   if (r.kept.length > 0) lines.push(`mantidas (state.json sem inFlight; nunca reiniciadas): ${r.kept.join(', ')}`)
   for (const n of r.notices) lines.push(`• ${n}`)
+  return `${lines.join('\n')}\n`
+}
+
+/** `sb install`: o que foi (ou seria) feito, com `~` no lugar da home. */
+export function renderInstall(r: InstallResult, home: string): string {
+  const short = (p: string): string => (p === home || p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p)
+  const verb: Record<InstallResult['files'][number]['status'], string> = { written: 'gravado', unchanged: 'já estava igual', 'would-write': 'seria gravado' }
+  const lines = r.simular ? ['Simulação: nada foi gravado e o launchctl não foi chamado.'] : []
+  for (const f of r.files) lines.push(`${short(f.file)}  (${verb[f.status]})`)
+  const z = r.zshrc
+  const file = short(z.file)
+  if (z.status === 'claude-conta') lines.push(`${file}: tem a linha do claude-conta; não mexi. Rode \`sb migrate\` para trocar pelo switchboard.`)
+  else if (z.status === 'different') lines.push(`${file}: já existe outra linha "# switchboard" (outro diretório de estado?); não mexi. Troque por: ${z.line}`)
+  else if (z.status === 'present') lines.push(`${file}: a linha do wrapper já está lá`)
+  else lines.push(`${file}: ${z.status === 'appended' ? 'linha do wrapper acrescentada (abra um terminal novo para valer)' : 'a linha do wrapper seria acrescentada'}`)
+  if (r.launchd.status === 'loaded') lines.push(`launchd: watch carregado em ${r.launchd.domain}`)
+  else if (r.launchd.status === 'failed') lines.push(`launchd: não consegui carregar o watch em ${r.launchd.domain}: ${r.launchd.error ?? 'erro desconhecido'}`)
+  else lines.push('launchd: o watch seria (re)carregado')
   return `${lines.join('\n')}\n`
 }
