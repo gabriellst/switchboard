@@ -366,12 +366,25 @@ test('wrapper: subcomando de manutenção passa direto, sem --settings e sem o t
   expect(calls.every((c) => c.hasOauthEnv === false)).toBe(true)
 })
 
-test('wrapper: dentro de uma sessão (CLAUDECODE) passa direto, sem --settings (e herda o ambiente da sessão)', () => {
+test('wrapper: dentro de uma sessão (CLAUDECODE) NÃO há passagem direta: `-p`, `agents` e `--bg` saem com --settings do mux e sem o token', () => {
   const sb = populatedSandbox()
-  const r = runWrapper(sb, join(sb.paths.home, 'bk'), ['-p', 'oi'], { CLAUDECODE: '1' })
-  expect(r.code).toBe(0)
-  // o filho de uma sessão herda a conta dela: aqui o token do ambiente da sessão segue junto, de propósito
-  expect(sb.calls().map((c) => ({ argv: c.argv, hasOauthEnv: c.hasOauthEnv }))).toEqual([{ argv: ['-p', 'oi'], hasOauthEnv: true }])
+  const dir = join(sb.paths.home, 'bk')
+  const link = muxLink(sb.paths, 'bk')
+  // um agente dentro da sessão roda `claude --bg …` / `claude agents`: se o daemon subir com o token da sessão, arrasta todos os muxes do keychain
+  for (const args of [['-p', 'x'], ['agents'], ['--bg', 'x']]) expect(runWrapper(sb, dir, args, { CLAUDECODE: '1' }).code).toBe(0)
+  expect(sb.calls().map((c) => ({ argv: c.argv, hasOauthEnv: c.hasOauthEnv }))).toEqual([
+    { argv: ['-p', 'x', '--settings', link], hasOauthEnv: false },
+    { argv: ['agents', '--settings', link], hasOauthEnv: false },
+    { argv: ['--bg', 'x', '--settings', link], hasOauthEnv: false },
+  ])
+})
+
+test('wrapper: dentro de uma sessão (CLAUDECODE) também falha fechado quando o `sb which` falha', () => {
+  const sb = populatedSandbox()
+  rmSync(muxLink(sb.paths, 'bk'))
+  const r = runWrapper(sb, join(sb.paths.home, 'bk'), ['--bg', 'x'], { CLAUDECODE: '1' })
+  expect(r.code).toBe(1)
+  expect(sb.calls()).toEqual([])
 })
 
 test('wrapper: subcomando de manutenção dentro de uma sessão (CLAUDECODE) também sai sem o token herdado', () => {
@@ -383,10 +396,10 @@ test('wrapper: subcomando de manutenção dentro de uma sessão (CLAUDECODE) tam
   expect(calls.every((c) => c.hasOauthEnv === false)).toBe(true)
 })
 
-test('wrapper: --settings explícito dentro de uma sessão (CLAUDECODE) segue a sessão: passa direto', () => {
+test('wrapper: --settings explícito dentro de uma sessão (CLAUDECODE) passa direto, sem o token herdado', () => {
   const sb = populatedSandbox()
   runWrapper(sb, join(sb.paths.home, 'bk'), ['--settings', '/x/y.json', '-p', 'oi'], { CLAUDECODE: '1' })
-  expect(sb.calls().map((c) => c.argv)).toEqual([['--settings', '/x/y.json', '-p', 'oi']])
+  expect(sb.calls().map((c) => ({ argv: c.argv, hasOauthEnv: c.hasOauthEnv }))).toEqual([{ argv: ['--settings', '/x/y.json', '-p', 'oi'], hasOauthEnv: false }])
 })
 
 test('wrapper: `sb which` falhando → mensagem, exit 1 e o claude não é chamado (link quebrado)', () => {
@@ -467,15 +480,15 @@ test('wrapper: --settings entra ANTES do primeiro `--` (depois dele seria argume
   expect(calls.every((c) => c.hasOauthEnv === false)).toBe(true)
 })
 
-test('wrapper: ramos que passam direto — o ambiente que o claude recebeu (token herdado) em cada um', () => {
+test('wrapper: ramos do wrapper — o ambiente que o claude recebeu (token herdado) em cada um', () => {
   const sb = populatedSandbox()
   const dir = join(sb.paths.home, 'bk')
   runWrapper(sb, dir, ['daemon', 'start']) // 0: manutenção
   runWrapper(sb, dir, ['--settings=/x.json', '-p', 'a']) // 1: --settings explícito
   runWrapper(sb, dir, ['-p', 'a']) // 2: via sb which
-  runWrapper(sb, dir, ['-p', 'a'], { CLAUDECODE: '1' }) // 3: dentro de sessão
+  runWrapper(sb, dir, ['-p', 'a'], { CLAUDECODE: '1' }) // 3: dentro de sessão (sem ramo próprio: igual ao 2)
   runWrapper(sb, dir, ['-p', '--', '--settings']) // 4: `--settings` só como texto depois do `--` não conta como explícito
-  expect(sb.calls().map((c) => c.hasOauthEnv)).toEqual([false, false, false, true, false])
+  expect(sb.calls().map((c) => c.hasOauthEnv)).toEqual([false, false, false, false, false])
   expect(sb.calls()[4]!.argv).toEqual(['-p', '--settings', muxLink(sb.paths, 'bk'), '--', '--settings'])
 })
 

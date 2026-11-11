@@ -212,13 +212,14 @@ rodando). Depois é só reabrir a sessão. Só mexe em sessões em segundo plano
 `sb install` instala, de uma vez:
 
 - o **LaunchAgent** `com.gabriellst.switchboard.watch` (`sb watch`, `KeepAlive`, sobe no login);
-- o **wrapper do zsh** (`<estado>/wrapper.zsh`, ligado por uma linha no `~/.zshrc`): todo `claude`
-  aberto fora de uma sessão ganha `--settings` do mux da pasta. Se o `sb which` falhar (link
+- o **wrapper do zsh** (`<estado>/wrapper.zsh`, ligado por uma linha no `~/.zshrc`): todo `claude`,
+  dentro ou fora de uma sessão do Claude, ganha `--settings` do mux da pasta. Se o `sb which` falhar (link
   quebrado, token com JSON inválido), o wrapper recusa e **não** chama o `claude`: sem settings ele
   cairia no keychain, calado. Subcomandos de manutenção (`auth`, `stop`, `rm`, `mcp`,
-  `setup-token`…) e `--settings` explícito passam direto; dentro de uma sessão o filho herda a conta
-  dela (e mantém o token dela). Fora de uma sessão do Claude o wrapper nunca repassa um
-  `CLAUDE_CODE_OAUTH_TOKEN` herdado, e os subcomandos de manutenção nunca o recebem, nem dentro de uma sessão;
+  `setup-token`…) e `--settings` explícito passam direto. Não existe passagem direta para quem está
+  dentro de uma sessão: um agente que roda `claude --bg …` ou `claude agents` lá dentro também passa
+  pelo `sb which` da pasta. O wrapper nunca repassa um `CLAUDE_CODE_OAUTH_TOKEN` herdado, em nenhum
+  ramo: se o daemon subisse com o token de uma conta, arrastaria para ela todas as sessões do keychain;
 - o comando **`/sb`** em `~/.claude/commands/sb.md` (`/sb`, `/sb swap app`, `/sb pin a1b2 trabalho`,
   `/sb accounts`…), que chama o `sb` (ele precisa estar no `PATH`). Um `/sb swap` ou `/sb pin` feito
   de dentro de uma sessão do mux nunca para a sessão que chamou: ela fica na espera.

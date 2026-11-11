@@ -269,9 +269,8 @@ Variáveis de ambiente: `HOME` (tudo parte dele, não de `os.homedir()`), `XDG_C
 - **Wrapper zsh** (`claude()`), na ordem: (1) subcomando de manutenção (`auth`, `attach`, `logs`,
   `stop`, `kill`, `rm`, `respawn`, `mcp`, `plugin`, `plugins`, `doctor`, `update`, `upgrade`, `install`,
   `setup-token`, `daemon`, `purge`, `import`, `gateway`, `ultrareview`, `auto-mode`, `help`) → passa
-  direto, sempre sem `CLAUDE_CODE_OAUTH_TOKEN`; (2) `CLAUDECODE` presente → passa direto (o filho
-  herda a conta da sessão); (3) `--settings` explícito antes de um `--` → passa direto, sem o token
-  herdado; (4) senão `--settings $(sb which <pasta>)` antes do primeiro `--`, e se o `which` falhar
+  direto, sempre sem `CLAUDE_CODE_OAUTH_TOKEN`; (2) `--settings` explícito antes de um `--` → passa
+  direto, sem o token herdado; (3) senão `--settings $(sb which <pasta>)` antes do primeiro `--`, e se o `which` falhar
   ou o runtime sumir, imprime o erro e devolve 1 **sem chamar o `claude`**. A linha do `~/.zshrc`
   tem um `else` que define um `claude()` recusando, caso o wrapper suma. Tira um `alias claude`.
 - **LaunchAgent** `com.gabriellst.switchboard.watch`: `RunAtLoad`, `KeepAlive`, `ThrottleInterval 30`,

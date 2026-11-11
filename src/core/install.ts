@@ -87,7 +87,7 @@ function wrapperContent(o: InstallPlanOptions): string {
   const rt = shQuote(o.runtimeBin)
   const cli = shQuote(o.cliPath)
   return `# switchboard — gerado por \`sb install\` (não editar à mão; rode \`sb install\` de novo).
-# Acrescenta --settings <estado>/mux/<mux da pasta>.json a todo \`claude\` aberto fora de uma sessão.
+# Acrescenta --settings <estado>/mux/<mux da pasta>.json a todo \`claude\`, dentro ou fora de uma sessão Claude.
 # Desligar: remova do ~/.zshrc a linha que termina em "${OUR_MARK}".
 # Um alias \`claude\` preexistente faria o zsh recusar \`claude() {\` (e o claude rodaria sem --settings): tira o alias
 # e define a função na forma com a palavra \`function\`, que não expande alias.
@@ -100,9 +100,7 @@ function claude {
     ${PASSTHROUGH})
       ( unset CLAUDE_CODE_OAUTH_TOKEN; command claude "$@" ); return ;;
   esac
-  # 2) Dentro de uma sessão Claude: o filho herda a conta da própria sessão.
-  if [[ -n \${CLAUDECODE-} ]]; then command claude "$@"; return; fi
-  # 3) --settings explícito (antes de um \`--\`): passa direto, sem o token herdado.
+  # 2) --settings explícito (antes de um \`--\`): passa direto, sem o token herdado.
   for a in "$@"; do
     [[ $a == -- ]] && break
     case $a in
@@ -112,7 +110,8 @@ function claude {
     [[ $prev == --cwd ]] && cwd=$a
     prev=$a
   done
-  # 4) O resto: o settings do mux da pasta. Sem ele o claude cairia no keychain, então qualquer falha recusa.
+  # 3) O resto (dentro ou fora de uma sessão Claude: um agente que roda \`claude --bg\` ou \`claude agents\` numa sessão cairia no
+  #    daemon com o token dela): o settings do mux da pasta. Sem ele o claude cairia no keychain, então qualquer falha recusa.
   if [[ ! -x ${rt} || ! -r ${cli} ]]; then
     print -ru2 -- "✗ sb: o sb mudou de lugar ou foi removido; o claude NÃO foi aberto. Rode: sb install"
     return 1

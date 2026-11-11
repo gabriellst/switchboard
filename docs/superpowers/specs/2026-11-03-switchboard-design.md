@@ -348,8 +348,8 @@ medido há 2 min
 
 ## 8. Integrações
 
-- **Wrapper zsh** (`claude()` como o `wrapper.zsh` do `claude-conta`): dentro de uma sessão
-  Claude → passa direto; com `--settings` explícito → passa direto; subcomandos de manutenção
+- **Wrapper zsh** (`claude()` como o `wrapper.zsh` do `claude-conta`): com `--settings` explícito → passa direto
+  (dentro ou fora de uma sessão Claude: não há passagem direta por `CLAUDECODE`, ver §14); subcomandos de manutenção
   (`auth`, `stop`, `rm`, `mcp`, `update`, `setup-token`, `daemon`…) → passa direto sem token;
   senão acrescenta `--settings <state>/mux/<mux da pasta ou default>.json`. Sempre sem
   `CLAUDE_CODE_OAUTH_TOKEN` no ambiente (anti-objetivo).
@@ -439,7 +439,7 @@ Registrados durante a execução; o `SPEC.md` descreve o comportamento final.
 
 **Integrações**
 - `sb run` e o wrapper põem `--settings` antes do primeiro `--` solto; uma flag com valor logo antes do `--` engole o `--settings`.
-- Ordem do wrapper: subcomando de manutenção primeiro (sempre sem o token herdado), depois "dentro de uma sessão", depois `--settings` explícito; a linha do `~/.zshrc` tem um `else` que define um `claude()` recusando se o wrapper sumir.
+- Ordem do wrapper: subcomando de manutenção primeiro (sempre sem o token herdado), depois `--settings` explícito, depois o resto via `sb which`. **Não há ramo "dentro de uma sessão" (`CLAUDECODE`)**: a Bash tool do Claude Code carrega as funções do shell do usuário, então um agente que rodasse `claude --bg` ou `claude agents` numa sessão subiria o daemon com o token dela e arrastaria os muxes do keychain; dentro ou fora de uma sessão o `claude` sai sem o token herdado e com o `--settings` do mux da pasta; a linha do `~/.zshrc` tem um `else` que define um `claude()` recusando se o wrapper sumir.
 - `sb install` grava o caminho absoluto do runtime (o do `PATH` que resolve para o mesmo binário): se o node mudar de lugar, rode de novo.
 - O CLI ignora flags desconhecidas (citty); só subcomando desconhecido falha (exit 1).
 - O lock do `watch` espera 250 ms (um lock de pid morto só é tomado depois do prazo); `sb usage` espera 1,5 s e cai na última medição.

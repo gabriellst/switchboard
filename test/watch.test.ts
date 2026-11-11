@@ -316,7 +316,7 @@ describe('tick — paradas', () => {
     const r2 = await tick(h.at(NOW + 30_000), cfgOf(sb), fast)
     expect(r2.restarts.bk?.stopped).toEqual([A4])
     expect(stops(sb)).toEqual([A1, A2, A3, A4])
-  }, 15_000)
+  })
 
   test('parada que falha: não tenta de novo no mesmo since e notifica uma vez', async () => {
     const sb = world()
@@ -444,7 +444,7 @@ describe('tick — fila de pins', () => {
     expect(r.pending.filter((p) => p.result === 'stopped-and-rewritten')).toHaveLength(3)
     expect(r.pending.filter((p) => p.result === 'queued')).toHaveLength(1)
     expect(stops(sb)).toHaveLength(3)
-  }, 15_000)
+  })
 })
 
 describe('tick — observação', () => {
@@ -599,7 +599,7 @@ describe('tick — runtime.json e lock', () => {
     const ok = await tick(h.at(NOW + 5 * 30_000), cfgOf(sb), { ...fast, memory })
     expect(ok.skipped).toBeUndefined()
     expect(memory.lockedTicks).toBe(0)
-  }, 15_000)
+  })
 })
 
 describe('watchLoop', () => {
@@ -881,7 +881,7 @@ describe('rodada de correções 1', () => {
     // um pedido novo (requestedAt novo) volta a tentar
     expect(pinSession(h.at(NOW + 150_000), cfgOf(sb), ID, 'admin1').result).toBe('stopped-and-rewritten')
     expect(stops(sb)).toEqual([ID, ID])
-  }, 15_000)
+  })
 
   describe('um só watch por máquina', () => {
     test('o laço recusa (exit 5) enquanto um vivo segura o pid file; pid morto é tomado e o arquivo some ao sair', async () => {
@@ -932,6 +932,6 @@ describe('rodada de correções 1', () => {
       expect(f1).toMatch(/não consegui parar aaaaaaa1/)
       const f2 = renderTick(await tick(h2.at(NOW + 30_000), cfgOf(sb2), fast)) // mux que não trocou agora (reinício)
       expect(f2).toMatch(/adiadas.*aaaaaaa1/)
-    }, 15_000)
+    })
   })
 })
