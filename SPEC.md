@@ -236,7 +236,7 @@ subdiretórios em 700, arquivos de segredo em 600. Nada ali é versionado. Escri
 | `pins/<conta>.json` | link → `tokens/<conta>.json` |
 | `usage.json` | `{ latest, previous, groups }`: última e anterior medição por conta (sem token) e grupos de duplicatas |
 | `runtime.json` | `mux.<mux> = { since, lastSwap? }` · `overrides.<mux> = { account, until }` (ms) · `pending[] = { jobId, settings, reason: pin\|unpin\|adopt\|migrate, requestedAt }` · `notified` (chaves `warn:`, `muxwarn:`, `swap:`, `err:`, `sched:`, `stopfail:`, `kept:`, `limit:`, `pin:`; podadas em 7 dias) |
-| `lock` | exclusão mútua: criado com `O_EXCL`, contém o pid; lock de pid morto é tomado; espera 30 s (exit 5), `sb usage` 1,5 s, `watch` 250 ms |
+| `lock` | exclusão mútua: criado com `O_EXCL`, contém o pid; lock de pid morto é tomado; espera 30 s (exit 5), `sb usage` 1,5 s, `watch` 250 ms, o login na hora de salvar o token 5 min (avisa "esperando o lock…" uma vez: o token acabou de sair do navegador) |
 | `watch.pid` · `watch.json` | trava do laço (um por máquina) · batimento `{ pid, lastTick }`; "rodando" = pid vivo e ciclo há ≤ 90 s |
 | `wrapper.zsh` | a função `claude()` do `sb install` |
 | `log/watch.log` · `log/login.log` · `log/login.pid` · `log/watch.out` | log do watch (token redigido) · marcos do login · trava do `setup-token` · saída do LaunchAgent |

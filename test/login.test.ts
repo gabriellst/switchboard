@@ -6,8 +6,8 @@ import { runLogin } from '../src/commands/login.js'
 import { loadConfig } from '../src/core/config.js'
 import { defaultCtx, type Ctx } from '../src/core/ctx.js'
 import { EXIT, SbError } from '../src/core/errors.js'
-import { AttachAfterLoginError, extractTokens, login, runSetupToken } from '../src/core/login.js'
-import { loginLockFile, logFile, tokenFile } from '../src/core/paths.js'
+import { AttachAfterLoginError, extractTokens, login, LOGIN_LOCK_WAIT_MS, runSetupToken } from '../src/core/login.js'
+import { lockFile, loginLockFile, logFile, tokenFile } from '../src/core/paths.js'
 import { FAKE_TOKEN, fakeApi, populatedSandbox, sandbox, type FakeApi, type Sandbox } from './helpers.js'
 
 const URL_LINE = 'https://claude.ai/oauth/authorize?code=true&client_id=abc&state=xyz'
@@ -521,6 +521,54 @@ describe('login()', () => {
   })
 })
 
+
+describe('lock do estado na hora de salvar o token', () => {
+  const hold = (sb: Sandbox): string => {
+    const f = lockFile(sb.paths)
+    mkdirSync(dirname(f), { recursive: true })
+    writeFileSync(f, String(process.pid)) // vivo: quem chega espera (um tick longo do watch segura o lock assim)
+    return f
+  }
+
+  test('espera por até 5 min (não 30 s): o token que o usuário acabou de obter pelo navegador não é jogado fora', () => {
+    expect(LOGIN_LOCK_WAIT_MS).toBeGreaterThanOrEqual(5 * 60_000)
+  })
+
+  test('lock ocupado e depois liberado: avisa que está esperando (sem token), salva e registra', async () => {
+    const sb = withRef()
+    const f = hold(sb)
+    setTimeout(() => rmSync(f, { force: true }), 700)
+    const waits: string[] = []
+    const r = await login(ctxFor(sb, await okApi()), 'nova', { terminal: true, readPasted: async () => FAKE_TOKEN, onWaitLock: () => waits.push('esperando o lock…') })
+    expect(r.created).toBe(true)
+    expect(waits).toEqual(['esperando o lock…']) // uma vez só, não a cada volta do laço
+    expect(existsSync(tokenFile(sb.paths, 'nova'))).toBe(true)
+    expect(Object.keys((await loadConfig(sb.paths)).accounts)).toContain('nova')
+    expect(readLog(sb)).toContain('esperando o lock')
+    expect(readLog(sb)).not.toMatch(/sk-ant-/)
+  })
+
+  test('o comando mostra "esperando o lock…" ao usuário (sem token) e termina bem', async () => {
+    const sb = withRef()
+    fakeOutput(sb)
+    const f = hold(sb)
+    setTimeout(() => rmSync(f, { force: true }), 700)
+    const out: string[] = []
+    const io = { isTTY: true, write: (t: string) => void out.push(t), err: (t: string) => void out.push(t) }
+    await runLogin(ctxFor(sb, await okApi()), { account: 'nova', terminal: false, foreground: false }, io)
+    expect(out.join('')).toContain('esperando o lock')
+    expect(out.join('')).not.toMatch(/sk-ant-/)
+  })
+
+  test('lock que não solta dentro do prazo → exit 5 e nada gravado', async () => {
+    const sb = withRef()
+    hold(sb)
+    const r = await exitOf(login(ctxFor(sb, await okApi()), 'nova', { terminal: true, readPasted: async () => FAKE_TOKEN, lockWaitMs: 300 }))
+    expect(r?.exit).toBe(EXIT.LOCKED)
+    expect(existsSync(tokenFile(sb.paths, 'nova'))).toBe(false)
+    rmSync(lockFile(sb.paths), { force: true })
+  })
+})
 
 describe('trava de login em andamento (login.pid)', () => {
   const lock = (sb: Sandbox, content: string): string => {

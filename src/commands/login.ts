@@ -139,6 +139,7 @@ export async function runLogin(ctx: Ctx, a: LoginArgs, io: LoginIO = defaultIO()
     const r = await login(ctx, a.account, {
       terminal: a.terminal,
       ...(a.attach && { attach: a.attach }),
+      onWaitLock: () => say('esperando o lock… (outro sb está rodando; o token já foi validado e será salvo assim que o lock soltar)\n'),
       onUrl: (url) => say(`Autorize no navegador com a conta "${a.account}" (clique em Autorizar). Se ele não abriu, use este link:\n${url}\n\nEsperando o login…\n`),
     })
     say(`conta ${r.account} salva (token em tokens/${r.account}.json, 600${r.created ? '; conta registrada' : ''})\n`)

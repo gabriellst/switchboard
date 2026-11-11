@@ -364,6 +364,10 @@ export interface LoginOpts {
   limitMs?: number
   /** link de autorização (não é segredo): o comando o mostra ao usuário */
   onUrl?: (url: string) => void
+  /** o lock do estado está com outro `sb` (ex.: um tick longo do watch): chamado uma vez, antes de esperar */
+  onWaitLock?: () => void
+  /** quanto esperar pelo lock na hora de salvar (padrão `LOGIN_LOCK_WAIT_MS`; os testes encurtam) */
+  lockWaitMs?: number
 }
 
 export interface LoginResult {
@@ -453,27 +457,41 @@ async function firstValid(ctx: Ctx, candidates: string[]): Promise<string> {
   throw new SbError('a API respondeu algo inesperado ao validar o token: nada foi salvo', EXIT.CHECK_FAILED)
 }
 
+/**
+ * Quanto o login espera pelo lock do estado na hora de salvar: o token acabou de sair do navegador e não dá para pedi-lo de
+ * novo de graça, então um tick longo do `watch` (paradas que bloqueiam) não pode fazer o login jogá-lo fora.
+ */
+export const LOGIN_LOCK_WAIT_MS = 5 * 60_000
+
 /** Salva o token (600) e registra a conta se nova; tudo sob o lock, só depois da sonda aprovar. */
-async function saveAndRegister(ctx: Ctx, account: string, token: string): Promise<boolean> {
-  return withLock(ctx.paths, async () => {
-    const hasConfig = existsSync(ctx.paths.configFile)
-    const cfg = hasConfig ? await loadConfig(ctx.paths) : undefined
-    const created = !cfg || !(account in cfg.accounts)
-    const hadToken = hasToken(ctx.paths, account)
-    saveToken(ctx.paths, account, token)
-    if (created) {
-      try {
-        if (!hasConfig) await ensureConfig(ctx.paths)
-        await editConfig(ctx.paths, [{ path: ['accounts', account], value: {} }])
-      } catch (e) {
-        // tudo-ou-nada: sem registro, o token novo e a config recém-criada não ficam para trás
-        if (!hadToken) rmSync(tokenFile(ctx.paths, account), { force: true })
-        if (!hasConfig) rmSync(ctx.paths.configFile, { force: true })
-        throw e
+async function saveAndRegister(ctx: Ctx, account: string, token: string, o: LoginOpts): Promise<boolean> {
+  const onWait = (): void => {
+    ctx.log('login', 'esperando o lock do estado (outro sb está rodando)')
+    o.onWaitLock?.()
+  }
+  return withLock(
+    ctx.paths,
+    async () => {
+      const hasConfig = existsSync(ctx.paths.configFile)
+      const cfg = hasConfig ? await loadConfig(ctx.paths) : undefined
+      const created = !cfg || !(account in cfg.accounts)
+      const hadToken = hasToken(ctx.paths, account)
+      saveToken(ctx.paths, account, token)
+      if (created) {
+        try {
+          if (!hasConfig) await ensureConfig(ctx.paths)
+          await editConfig(ctx.paths, [{ path: ['accounts', account], value: {} }])
+        } catch (e) {
+          // tudo-ou-nada: sem registro, o token novo e a config recém-criada não ficam para trás
+          if (!hadToken) rmSync(tokenFile(ctx.paths, account), { force: true })
+          if (!hasConfig) rmSync(ctx.paths.configFile, { force: true })
+          throw e
+        }
       }
-    }
-    return created
-  })
+      return created
+    },
+    { waitMs: o.lockWaitMs ?? LOGIN_LOCK_WAIT_MS, onWait },
+  )
 }
 
 /**
@@ -500,7 +518,7 @@ export async function login(ctx: Ctx, account: string, o: LoginOpts): Promise<Lo
       throw new SbError('não consegui capturar o token do claude', EXIT.CHECK_FAILED, `  rode \`sb login ${account} --terminal\` e cole o token`)
     }
     const token = await firstValid(ctx, candidates)
-    const created = await saveAndRegister(ctx, account, token)
+    const created = await saveAndRegister(ctx, account, token, o)
     const result: LoginResult = { account, created }
     if (o.attach) {
       ctx.log('login', 'attach')

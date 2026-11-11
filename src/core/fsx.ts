@@ -166,8 +166,9 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  * Espera até `waitMs`; passado o prazo lança exit 5. Quem chama faz o ler-modificar-gravar dentro de `fn`
  * (`editConfig`, `writeRuntime`...).
  */
-export async function withLock<T>(paths: Paths, fn: () => Promise<T>, opts: { waitMs?: number } = {}): Promise<T> {
+export async function withLock<T>(paths: Paths, fn: () => Promise<T>, opts: { waitMs?: number; onWait?: () => void } = {}): Promise<T> {
   const waitMs = opts.waitMs ?? 30_000
+  let told = false
   const file = lockFile(paths)
   mkdirPrivate(dirname(file))
   const deadline = Date.now() + waitMs
@@ -185,6 +186,10 @@ export async function withLock<T>(paths: Paths, fn: () => Promise<T>, opts: { wa
       )
     }
     if (state.kind === 'stale') breakStale(file)
+    if (state.kind === 'live' && !told) {
+      told = true
+      opts.onWait?.() // uma vez só: quem chama avisa o usuário que está esperando
+    }
     await sleep(state.kind === 'stale' || state.kind === 'gone' ? 1 : POLL_MS)
   }
   try {
