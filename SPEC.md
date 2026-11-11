@@ -257,7 +257,7 @@ Variáveis de ambiente: `HOME` (tudo parte dele, não de `os.homedir()`), `XDG_C
   `claude agents --cwd <root> --settings <link>`; `run` → `claude <args> --settings <link>` com o
   `--settings` **antes do primeiro `--` solto** (depois dele tudo é posicional e o `claude` rodaria
   no keychain); `--settings` do usuário antes do `--` é recusado (exit 3), assim como qualquer outra
-  opção antes do `--` em `sb run` (`splitRunArgs`: o CLI ignora flags desconhecidas, o `run` não).
+  opção antes do `--` em `sb run` (`splitRunArgs`; a recusa de opção desconhecida de todo comando está na seção 9).
   Resíduo: uma flag com valor imediatamente antes do `--` solto (`--model -- texto`) engole o
   `--settings` inserido (erro de digitação do comando; vale também para o wrapper). SIGINT/SIGTERM/SIGHUP são
   repassados (com terminal, o Ctrl+C já chega ao filho); o `sb` sai com o código ou o sinal do `claude`.
@@ -308,7 +308,11 @@ Todos que produzem dados aceitam `--json`, que nunca traz token (e passa por uma
 | `sb doctor [--fix] [--json]` | seção 11 |
 | `sb migrate [--simular] [--finish] [--json]` | seção 12 |
 
-O CLI ignora flags desconhecidas (comportamento do citty) e só falha em subcomando desconhecido.
+Opção desconhecida é recusada em todo comando e subcomando (exit 3, mensagem com o nome da opção, antes de
+qualquer efeito): o citty as ignora em silêncio, então `guarded` (`src/commands/guard.ts`) compara os `rawArgs`
+com os `args` declarados (nome, camelCase/kebab-case, aliases, `--no-<booleana>`, `--opção=valor`, `--help`/`-h`)
+até o primeiro `--`. `--version` só vale sozinho (`sb --version`). Em `sb run` o que vem depois do `--` é do `claude`.
+Só um subcomando desconhecido falha com exit 1.
 
 ## 10. Exit codes
 
@@ -318,7 +322,7 @@ O CLI ignora flags desconhecidas (comportamento do citty) e só falha em subcoma
 |---|---|
 | `1` | `doctor` com erro; `which`/`agents`/`run` com link ou token inválido; `swap` sem alternativa ou com parada que falhou; `claude stop` que falhou ao fixar; login cujo token não autenticou, que não capturou token (o `setup-token` saiu com 0 sem entregá-lo) ou que foi interrompido por sinal; `install` com `launchctl` falho ou linha do zshrc diferente; `migrate` com `sb install` problemático; `migrate --finish` recusado; `runtime.json` corrompido num comando manual; erro inesperado; subcomando desconhecido |
 | `2` | config ausente ou inválida; `doctor` com `config.invalid`; pasta fora de todo root sem `default` |
-| `3` | nome inválido, mux/conta/sessão inexistente ou recusada pelas regras (`accounts`, destino igual, prefixo ambíguo), opções incompatíveis, argumento a mais, `--json` do `watch` sem `--once`, conta sem token, `migrate` sem o que migrar |
+| `3` | nome inválido, mux/conta/sessão inexistente ou recusada pelas regras (`accounts`, destino igual, prefixo ambíguo), opções incompatíveis, opção desconhecida, argumento a mais, `--json` do `watch` sem `--once`, conta sem token, `migrate` sem o que migrar |
 | `4` | `claude` ausente ou que não executa, `claude agents --json` que falha ou tem formato inesperado, `state.json` de formato novo, `claude setup-token` que sai com código ≠ 0 ou passa de 15 min |
 | `5` | outro `sb` segura o lock; segundo `sb watch`; login em andamento; `watch --once` com o lock ocupado |
 

@@ -341,9 +341,11 @@ Limites conhecidos:
   `doctor`) em vez de adivinhar.
 - O `sb run` e o wrapper colocam `--settings` **antes do primeiro `--` solto**; uma flag com valor
   logo antes do `--` (`--model -- texto`) engole o `--settings`. É erro de digitação do comando.
-- O parser ignora flags desconhecidas (`sb usage --bogus` roda normalmente); só um subcomando
-  desconhecido dá erro (exit 1). Exceção: `sb run` recusa (exit 3) qualquer opção desconhecida antes
-  do `--` e também `--settings`/`--settings=` antes do `--`.
+- Opção desconhecida é recusada em todo comando e subcomando (exit 3, com o nome da opção, antes de
+  qualquer efeito): `sb migrate --simulate`, `sb install --dry-run` ou `sb swap bk --cleer` não fazem
+  nada. Valem `--opção`, `--opção=valor`, `--no-<opção booleana>` e `--help`/`-h`. Em `sb run`, o que vem
+  depois do `--` é do `claude` e não é conferido; antes dele só o nome do mux, e `--settings`/
+  `--settings=` também é recusado. Só um subcomando desconhecido dá exit 1.
 - É de um usuário só e não está publicado. Usar várias assinaturas e alternar por limite é decisão
   sua; confira os termos do plano.
 

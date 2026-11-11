@@ -441,7 +441,7 @@ Registrados durante a execução; o `SPEC.md` descreve o comportamento final.
 - `sb run` e o wrapper põem `--settings` antes do primeiro `--` solto; uma flag com valor logo antes do `--` engole o `--settings`.
 - Ordem do wrapper: subcomando de manutenção primeiro (sempre sem o token herdado), depois `--settings` explícito, depois o resto via `sb which`. **Não há ramo "dentro de uma sessão" (`CLAUDECODE`)**: a Bash tool do Claude Code carrega as funções do shell do usuário, então um agente que rodasse `claude --bg` ou `claude agents` numa sessão subiria o daemon com o token dela e arrastaria os muxes do keychain; dentro ou fora de uma sessão o `claude` sai sem o token herdado e com o `--settings` do mux da pasta; a linha do `~/.zshrc` tem um `else` que define um `claude()` recusando se o wrapper sumir.
 - `sb install` grava o caminho absoluto do runtime (o do `PATH` que resolve para o mesmo binário): se o node mudar de lugar, rode de novo.
-- O CLI ignora flags desconhecidas (citty); só subcomando desconhecido falha (exit 1).
+- Opção desconhecida é recusada em todo comando (exit 3, antes de qualquer efeito; `guarded`): o citty as ignora em silêncio e `sb migrate --simulate` aplicaria a migração. Só subcomando desconhecido falha com exit 1.
 - O lock do `watch` espera 250 ms (um lock de pid morto só é tomado depois do prazo); `sb usage` espera 1,5 s e cai na última medição.
 
 **`doctor`**
