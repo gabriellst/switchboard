@@ -37,6 +37,11 @@ export function shQuote(s: string): string {
 
 const xmlEscape = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
 
+/**
+ * O ambiente do `watch` sob o launchd: PATH, HOME e os caminhos RESOLVIDOS de quem instala (config, estado, jobs). Sem eles, um
+ * `XDG_STATE_HOME`/`SWITCHBOARD_*` do shell faria o CLI e o wrapper usarem um estado e o `watch` outro. Nunca vão para cá os
+ * seams de teste (`SWITCHBOARD_CLAUDE`, `_API_BASE`, `_PS`, `_NO_NOTIFY`) nem token.
+ */
 function plistContent(p: Paths, o: InstallPlanOptions): string {
   const pathDirs = [...new Set([o.claudeDir, dirname(o.runtimeBin), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'])]
   const log = join(p.stateDir, 'log', 'watch.out')
@@ -69,6 +74,12 @@ function plistContent(p: Paths, o: InstallPlanOptions): string {
     ${str(pathDirs.join(delimiter))}
     <key>HOME</key>
     ${str(p.home)}
+    <key>SWITCHBOARD_CONFIG</key>
+    ${str(p.configFile)}
+    <key>SWITCHBOARD_STATE_DIR</key>
+    ${str(p.stateDir)}
+    <key>SWITCHBOARD_JOBS_DIR</key>
+    ${str(p.jobsDir)}
   </dict>
 </dict>
 </plist>

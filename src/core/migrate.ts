@@ -697,7 +697,7 @@ function legacyBlockers(ctx: Ctx): string[] {
   if (legacy.length > 0) lines.push(`sessões ainda no settings do claude-conta: ${legacy.join(', ')}`)
   if (unreadable.length > 0) lines.push(`sessões com state.json ilegível (não dá para provar que não são do claude-conta; \`claude rm\` as que sobraram): ${unreadable.join(', ')}`)
   const queued = readRuntime(paths).pending.filter((i) => i.reason === 'migrate').map((i) => i.jobId)
-  if (queued.length > 0) lines.push(`sessões vivas na fila da migração (o watch as reescreve quando ficarem livres): ${queued.join(', ')}`)
+  if (queued.length > 0) lines.push(`sessões vivas na fila da migração (o watch as PARA e reescreve quando ficarem livres): ${queued.join(', ')}`)
   const ps = psSnapshot(ctx)
   if (!ps.ok) lines.push('não consegui ler a tabela de processos (`ps` falhou): sem ela não dá para saber se há views do `claude agents` ainda no settings do claude-conta')
   const views = viewsIn(ctx, ps.rows).filter((v) => ownershipOf(v.args, paths).kind === 'legacy').map((v) => `pid ${v.pid}`)

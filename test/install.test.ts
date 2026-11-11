@@ -5,7 +5,7 @@ import { expect, test } from 'bun:test'
 import type { Ctx } from '../src/core/ctx.js'
 import { SbError } from '../src/core/errors.js'
 import { findClaudeDir, LAUNCH_LABEL, stableRuntime, planInstall, plistFile, runInstall, slashCommandFile, wrapperFile } from '../src/core/install.js'
-import { muxLink } from '../src/core/paths.js'
+import { muxLink, resolvePaths } from '../src/core/paths.js'
 import { FAKE_TOKEN, filesUnder, populatedSandbox, sandbox, type Sandbox } from './helpers.js'
 
 const CLI = join(import.meta.dir, '..', 'src', 'cli.ts')
@@ -71,10 +71,45 @@ test('plist: label, ProgramArguments, KeepAlive, logs, ambiente mínimo e sem to
   expect(data.StandardOutPath).toBe(join(sb.paths.stateDir, 'log', 'watch.out'))
   expect(data.StandardErrorPath).toBe(join(sb.paths.stateDir, 'log', 'watch.out'))
   const env = data.EnvironmentVariables as Record<string, string>
-  expect(Object.keys(env).sort()).toEqual(['HOME', 'PATH'])
+  expect(Object.keys(env).sort()).toEqual(['HOME', 'PATH', 'SWITCHBOARD_CONFIG', 'SWITCHBOARD_JOBS_DIR', 'SWITCHBOARD_STATE_DIR'])
   expect(env.HOME).toBe(sb.paths.home)
+  expect(env.SWITCHBOARD_CONFIG).toBe(sb.paths.configFile)
+  expect(env.SWITCHBOARD_STATE_DIR).toBe(sb.paths.stateDir)
+  expect(env.SWITCHBOARD_JOBS_DIR).toBe(sb.paths.jobsDir)
   expect(env.PATH!.split(':')).toContain(claudeDir)
   expect(env.PATH!.split(':')[0]).toBe(claudeDir) // o claude escolhido vem antes de qualquer outro
+})
+
+test('plist: grava os caminhos RESOLVIDOS (XDG_*) de quem instala: o watch usa o mesmo estado que o CLI e o wrapper', () => {
+  const sb = sandbox()
+  const env = { HOME: sb.paths.home, XDG_STATE_HOME: join(sb.dir, 'xdg-state'), XDG_CONFIG_HOME: join(sb.dir, 'xdg-config') }
+  const paths = resolvePaths(env)
+  expect(paths.stateDir).toBe(join(sb.dir, 'xdg-state', 'switchboard')) // o XDG vale para o CLI...
+  const plist = byFile(planInstall(paths, { runtimeBin: process.execPath, cliPath: CLI, claudeDir: join(sb.dir, 'claude-bin') }), plistFile(paths))
+  mkdirSync(join(plist.file, '..'), { recursive: true })
+  writeFileSync(plist.file, plist.content)
+  const e = plistAsJson(plist.file).EnvironmentVariables as Record<string, string>
+  expect(e.SWITCHBOARD_STATE_DIR).toBe(join(sb.dir, 'xdg-state', 'switchboard')) // ...e agora vale para o watch também
+  expect(e.SWITCHBOARD_CONFIG).toBe(join(sb.dir, 'xdg-config', 'switchboard', 'config.jsonc'))
+  expect(e.SWITCHBOARD_JOBS_DIR).toBe(join(sb.paths.home, '.claude', 'jobs'))
+  expect(Object.keys(e).some((k) => /XDG/.test(k))).toBe(false)
+})
+
+test('plist: `sb install` de verdade (subprocesso, launchctl falso) grava os três caminhos e nunca os seams de teste nem token', () => {
+  const sb = sandbox()
+  const shimDir = join(sb.dir, 'shim')
+  mkdirSync(shimDir, { recursive: true })
+  writeFileSync(join(shimDir, 'launchctl'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  const r = sb.runSb(['install'], { env: { PATH: `${shimDir}:${process.env.PATH ?? '/usr/bin:/bin'}`, CLAUDE_CODE_OAUTH_TOKEN: FAKE_TOKEN, SWITCHBOARD_API_BASE: 'http://127.0.0.1:9' } })
+  expect(r.code).toBe(0)
+  const text = readFileSync(plistFile(sb.paths), 'utf8')
+  const e = plistAsJson(plistFile(sb.paths)).EnvironmentVariables as Record<string, string>
+  expect(Object.keys(e).sort()).toEqual(['HOME', 'PATH', 'SWITCHBOARD_CONFIG', 'SWITCHBOARD_JOBS_DIR', 'SWITCHBOARD_STATE_DIR'])
+  expect(e.SWITCHBOARD_CONFIG).toBe(sb.env.SWITCHBOARD_CONFIG!)
+  expect(e.SWITCHBOARD_STATE_DIR).toBe(sb.env.SWITCHBOARD_STATE_DIR!)
+  expect(e.SWITCHBOARD_JOBS_DIR).toBe(sb.env.SWITCHBOARD_JOBS_DIR!)
+  for (const seam of ['SWITCHBOARD_CLAUDE', 'SWITCHBOARD_API_BASE', 'SWITCHBOARD_PS', 'SWITCHBOARD_NO_NOTIFY', 'CLAUDE_CODE_OAUTH_TOKEN']) expect(text).not.toContain(seam)
+  expect(text).not.toMatch(/sk-ant-/)
 })
 
 test('plist: caminhos com & < > " \' e espaço saem escapados e o XML continua válido', () => {

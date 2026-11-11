@@ -274,7 +274,9 @@ Variáveis de ambiente: `HOME` (tudo parte dele, não de `os.homedir()`), `XDG_C
   ou o runtime sumir, imprime o erro e devolve 1 **sem chamar o `claude`**. A linha do `~/.zshrc`
   tem um `else` que define um `claude()` recusando, caso o wrapper suma. Tira um `alias claude`.
 - **LaunchAgent** `com.gabriellst.switchboard.watch`: `RunAtLoad`, `KeepAlive`, `ThrottleInterval 30`,
-  `PATH` com o diretório do `claude`; carregado com `launchctl bootstrap gui/<uid>` (`bootout` antes;
+  `PATH` com o diretório do `claude`, `HOME` e os caminhos **resolvidos** de quem instalou
+  (`SWITCHBOARD_CONFIG`, `SWITCHBOARD_STATE_DIR`, `SWITCHBOARD_JOBS_DIR`: com `XDG_*` ou `SWITCHBOARD_*` no shell, o
+  `watch` usa o mesmo estado que o CLI; nunca os seams de teste nem token); carregado com `launchctl bootstrap gui/<uid>` (`bootout` antes;
   3 tentativas). O runtime gravado é o caminho estável do node/bun (a entrada do `PATH` que resolve
   para o mesmo binário).
 - **`/sb`**: `~/.claude/commands/sb.md`, `!sb $ARGUMENTS 2>&1`, `allowed-tools: Bash(sb:*)`,

@@ -227,7 +227,10 @@ rodando). Depois é só reabrir a sessão. Só mexe em sessões em segundo plano
 `sb install --simular` mostra o que faria. É idempotente. Se o `~/.zshrc` ainda tem a linha
 `# claude-conta`, ele **não** mexe nele (dois wrappers brigariam) e manda rodar `sb migrate`: quem
 vem do `claude-conta` migra primeiro. Ele grava o **caminho absoluto do
-runtime** (node ou bun) no plist e no wrapper: se o node mudar de lugar, rode `sb install` de novo.
+runtime** (node ou bun) no plist e no wrapper: se o node mudar de lugar, rode `sb install` de novo. O
+plist também leva os caminhos de config, estado e jobs que o `sb install` está usando
+(`SWITCHBOARD_CONFIG`, `SWITCHBOARD_STATE_DIR`, `SWITCHBOARD_JOBS_DIR`, já resolvidos com `XDG_*`):
+mudou uma dessas variáveis no shell? rode `sb install` de novo.
 Para rodar o `watch` à mão: `sb watch` (só um por máquina; `sb watch --once [--json]` faz um ciclo e
 sai). O log é `<estado>/log/watch.log`.
 
