@@ -23,20 +23,37 @@ rodando, e interromper o trabalho para trocar de conta seria pior que o limite.
 
 ## Instalação
 
-Ainda não está publicado (nem no npm, nem em Release): a instalação é local, a partir da pasta do
-projeto. Para **compilar** precisa do bun (`bun run build`); o CLI compilado roda em Node ≥ 20 puro. Precisa do `claude` no `PATH`. Foi feito para macOS: o `sb watch` roda
-como LaunchAgent, as notificações usam `osascript` e o login usa o `script` do sistema.
+Ainda não está no npm: a instalação é pelo tarball do Release no GitHub.
 
 ```bash
-cd switchboard
+npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.0/switchboard-0.1.0.tgz
+# ou
+bun add -g https://github.com/gabriellst/switchboard/releases/download/v0.1.0/switchboard-0.1.0.tgz
+
+sb --version                         # 0.1.0
+```
+
+Requer Node ≥ 20 (funciona sob bun também) e o `claude` no `PATH`. Foi feito para macOS: o
+`sb watch` roda como LaunchAgent, as notificações usam `osascript` e o login usa o `script` do
+sistema.
+
+O `sb install` grava no LaunchAgent e no wrapper o caminho do `sb` instalado: depois de
+atualizar ou reinstalar o pacote, rode `sb install` de novo.
+
+### A partir do código
+
+Para **compilar** precisa do bun; o CLI compilado roda em Node ≥ 20 puro.
+
+```bash
+git clone https://github.com/gabriellst/switchboard && cd switchboard
 bun install
 bun run build                        # gera dist/cli.js
 mkdir -p ~/.local/bin
 ln -s "$PWD/dist/cli.js" ~/.local/bin/sb
-sb --version                         # 0.1.0
 ```
 
 Para desenvolver: `bun test` · `bun run check` (tipos) · `bun run build`.
+Para gerar o tarball de um Release: `bun run build && npm pack`.
 
 ## Começando
 
@@ -263,7 +280,7 @@ Roda nesta ordem:
 
 ```bash
 # 1. instalar o sb (uma vez)
-cd switchboard && bun run build && ln -s "$PWD/dist/cli.js" ~/.local/bin/sb
+npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.0/switchboard-0.1.0.tgz
 
 # 2. ver o plano; não grava nada nem para nenhum processo
 sb migrate --simular
