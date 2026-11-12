@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { accessSync, closeSync, constants, existsSync, openSync, readSync, mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { Ctx } from './ctx.js'
 import { EXIT, SbError } from './errors.js'
@@ -28,6 +28,8 @@ export interface InstallPlanOptions {
   cliPath: string
   /** diretório do `claude` no PATH: o `watch` sob o launchd não herda o PATH do terminal */
   claudeDir: string
+  /** todas as pastas do PATH com um `claude` (binário antes de invólucro); padrão: só `claudeDir` */
+  claudeDirs?: string[]
 }
 
 /** Aspas simples para o shell (zsh/sh); caminho "limpo" fica como está, para a linha do zshrc ficar legível. */
@@ -62,7 +64,7 @@ function plistEnv(content: string): Record<string, string> {
  */
 function plistContent(p: Paths, o: InstallPlanOptions): string {
   const watchEnv = watchEnvOf(p)
-  const pathDirs = [...new Set([o.claudeDir, dirname(o.runtimeBin), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'])]
+  const pathDirs = [...new Set([...(o.claudeDirs ?? [o.claudeDir]), dirname(o.runtimeBin), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'])]
   const log = join(p.stateDir, 'log', 'watch.out')
   const str = (s: string): string => `<string>${xmlEscape(s)}</string>`
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -200,20 +202,49 @@ export function stableRuntime(env: Record<string, string | undefined>, execPath:
 }
 
 /** Diretório do `claude`: `SWITCHBOARD_CLAUDE` (teste) ou o primeiro executável `claude` do PATH. */
-export function findClaudeDir(env: Record<string, string | undefined>): string {
-  if (env.SWITCHBOARD_CLAUDE) return dirname(env.SWITCHBOARD_CLAUDE)
+/** O arquivo começa com `#!`? (script: pode ser um invólucro que procura o claude de verdade noutra pasta do PATH) */
+function isScript(file: string): boolean {
+  try {
+    const fd = openSync(file, 'r')
+    try {
+      const b = Buffer.alloc(2)
+      return readSync(fd, b, 0, 2, 0) === 2 && b[0] === 0x23 && b[1] === 0x21
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return false
+  }
+}
+
+/**
+ * TODAS as pastas do PATH que têm um `claude` executável, sem repetir: binários primeiro, scripts depois (na ordem do PATH
+ * dentro de cada grupo). O primeiro `claude` do PATH pode ser um invólucro (o cmux põe o dele na frente e ele procura o
+ * claude de verdade nas OUTRAS pastas): gravar só a pasta dele no LaunchAgent deixa o `watch` sem achar o claude.
+ */
+export function findClaudeDirs(env: Record<string, string | undefined>): string[] {
+  if (env.SWITCHBOARD_CLAUDE) return [dirname(env.SWITCHBOARD_CLAUDE)]
+  const bins: string[] = []
+  const scripts: string[] = []
   for (const dir of (env.PATH ?? '').split(delimiter)) {
-    if (!dir) continue
+    if (!dir || bins.includes(dir) || scripts.includes(dir)) continue
     const f = join(dir, 'claude')
     try {
       if (!statSync(f).isFile()) continue
       accessSync(f, constants.X_OK)
-      return dir
     } catch {
-      // não está aqui
+      continue // não está aqui
     }
+    ;(isScript(f) ? scripts : bins).push(dir)
   }
-  throw new SbError('não achei o `claude` no PATH', EXIT.CLAUDE, '  instale o Claude Code (ou ponha o diretório dele no PATH) e rode `sb install` de novo')
+  const all = [...bins, ...scripts]
+  if (all.length === 0) throw new SbError('não achei o `claude` no PATH', EXIT.CLAUDE, '  instale o Claude Code (ou ponha o diretório dele no PATH) e rode `sb install` de novo')
+  return all
+}
+
+/** A pasta do `claude` que o `sb` deve usar: a primeira de `findClaudeDirs` (o binário de verdade, se houver). */
+export function findClaudeDir(env: Record<string, string | undefined>): string {
+  return findClaudeDirs(env)[0]!
 }
 
 export type FileStatus = 'written' | 'unchanged' | 'would-write'

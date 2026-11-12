@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { expect, test } from 'bun:test'
 import type { Ctx } from '../src/core/ctx.js'
 import { SbError } from '../src/core/errors.js'
-import { findClaudeDir, LAUNCH_LABEL, stableRuntime, planInstall, plistFile, runInstall, slashCommandFile, wrapperFile } from '../src/core/install.js'
+import { findClaudeDir, findClaudeDirs, LAUNCH_LABEL, stableRuntime, planInstall, plistFile, runInstall, slashCommandFile, wrapperFile } from '../src/core/install.js'
 import { muxLink, resolvePaths } from '../src/core/paths.js'
 import { renderInstall } from '../src/report.js'
 import { FAKE_TOKEN, filesUnder, populatedSandbox, sandbox, type Sandbox } from './helpers.js'
@@ -407,6 +407,27 @@ test('findClaudeDir: SWITCHBOARD_CLAUDE manda; senão procura `claude` executáv
   expect(() => findClaudeDir({ PATH: bin })).toThrow(SbError) // sem bit de execução não conta
   chmodSync(join(bin, 'claude'), 0o755)
   expect(findClaudeDir({ PATH: `/nao/existe:${bin}` })).toBe(bin)
+})
+
+test('findClaudeDirs: TODAS as pastas do PATH com `claude`, o binário de verdade antes de scripts (ex.: o invólucro do cmux)', () => {
+  const sb = sandbox()
+  const wrapperDir = join(sb.dir, 'cmux-bin')
+  const realDir = join(sb.dir, 'local-bin')
+  for (const d of [wrapperDir, realDir]) mkdirSync(d, { recursive: true })
+  // o invólucro vem PRIMEIRO no PATH e, sozinho, não acha o claude de verdade (foi o que quebrou o watch em 12/11/2026)
+  writeFileSync(join(wrapperDir, 'claude'), '#!/usr/bin/env bash\nexit 127\n', { mode: 0o755 })
+  writeFileSync(join(realDir, 'claude'), Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0x07, 0x00]), { mode: 0o755 })
+  expect(findClaudeDirs({ PATH: `${wrapperDir}:/nao/existe:${realDir}:${wrapperDir}` })).toEqual([realDir, wrapperDir])
+  expect(findClaudeDir({ PATH: `${wrapperDir}:${realDir}` })).toBe(realDir)
+  // só o script existe: serve (é o claude falso dos testes, ou uma instalação por script)
+  expect(findClaudeDirs({ PATH: wrapperDir })).toEqual([wrapperDir])
+})
+
+test('plist: o PATH do watch leva todas as pastas do claude, na ordem dada', () => {
+  const sb = sandbox()
+  const plist = byFile(planInstall(sb.paths, { runtimeBin: '/rt/bin/node', cliPath: CLI, claudeDir: '/real/bin', claudeDirs: ['/real/bin', '/wrapper/bin'] }), plistFile(sb.paths))
+  const path = /<key>PATH<\/key>\s*<string>([^<]*)<\/string>/.exec(plist.content)![1]!
+  expect(path.split(':').slice(0, 3)).toEqual(['/real/bin', '/wrapper/bin', '/rt/bin'])
 })
 
 // ---------------------------------------------------------------------------------------------
