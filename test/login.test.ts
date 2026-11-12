@@ -371,6 +371,49 @@ describe('login()', () => {
     expect(readFileSync(tokenFile(sb.paths, 'ref'), 'utf8')).toContain(FAKE_TOKEN)
   })
 
+  test('API autentica (200) sem cabeçalhos de uso → token salvo, com aviso que diz o HTTP', async () => {
+    const sb = withRef()
+    fakeOutput(sb)
+    api = await fakeApi(() => new Response('{}', { status: 200 }))
+    const r = await login(ctxFor(sb, api), 'nova', { terminal: false })
+    expect(readFileSync(tokenFile(sb.paths, 'nova'), 'utf8')).toContain(FAKE_TOKEN)
+    expect(r.usageUnreadable).toEqual({ httpStatus: 200, unified: [] })
+    expect(readLog(sb)).toContain('HTTP 200')
+    expect(readLog(sb)).not.toMatch(/sk-ant-/)
+  })
+
+  test('200 com 5h mas sem 7d → token salvo; o aviso lista os cabeçalhos que vieram', async () => {
+    const sb = withRef()
+    fakeOutput(sb)
+    const partial = Object.fromEntries(Object.entries(H).filter(([k]) => !k.includes('-7d-')))
+    api = await fakeApi(() => new Response('{}', { status: 200, headers: partial }))
+    const r = await login(ctxFor(sb, api), 'nova', { terminal: false })
+    expect(existsSync(tokenFile(sb.paths, 'nova'))).toBe(true)
+    expect(r.usageUnreadable?.httpStatus).toBe(200)
+    expect(r.usageUnreadable?.unified).toContain('5h-utilization')
+    expect(r.usageUnreadable?.unified).not.toContain('7d-utilization')
+  })
+
+  test('429 sem cabeçalhos (autenticou, mas limitado) → token salvo', async () => {
+    const sb = withRef()
+    fakeOutput(sb)
+    api = await fakeApi(() => new Response('{}', { status: 429 }))
+    const r = await login(ctxFor(sb, api), 'nova', { terminal: false })
+    expect(existsSync(tokenFile(sb.paths, 'nova'))).toBe(true)
+    expect(r.usageUnreadable?.httpStatus).toBe(429)
+  })
+
+  test('sonda 500 → exit 1, nada salvo, e a mensagem diz o HTTP e os cabeçalhos', async () => {
+    const sb = withRef()
+    fakeOutput(sb)
+    api = await fakeApi(() => new Response('{}', { status: 500 }))
+    const r = await exitOf(login(ctxFor(sb, api), 'nova', { terminal: false }))
+    expect(r?.exit).toBe(EXIT.CHECK_FAILED)
+    expect(r?.message).toContain('HTTP 500')
+    expect(existsSync(tokenFile(sb.paths, 'nova'))).toBe(false)
+    expect(r?.message).not.toMatch(/sk-ant-/)
+  })
+
   test('sonda 401 → exit 1, nada salvo, config intacta, FIM falhou', async () => {
     const sb = withRef()
     const before = readFileSync(sb.paths.configFile, 'utf8')

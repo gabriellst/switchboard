@@ -30,6 +30,15 @@ const PROBE_BODY = JSON.stringify({
 
 type Headers = { get(n: string): string | null }
 
+/** Os cabeçalhos de uso que a sonda conhece (só os nomes, sem o prefixo): servem ao diagnóstico de uma resposta que não deu para ler. */
+const UNIFIED_NAMES = ['5h-utilization', '5h-reset', '5h-status', '7d-utilization', '7d-reset', '7d-status', 'status', 'reset', 'representative-claim', 'overage-status'] as const
+
+/** O que a API devolveu, sem corpo e sem token: status HTTP e QUAIS cabeçalhos de uso vieram. */
+export interface ProbeDiag {
+  httpStatus: number
+  unified: string[]
+}
+
 /** Número finito de um cabeçalho; vazio, em branco ou não numérico → undefined (nunca NaN). */
 function num(h: Headers, name: string): number | undefined {
   const raw = h.get(PREFIX + name)?.trim()
@@ -65,7 +74,7 @@ function fromHttpStatus(httpStatus: number): ProbeResult {
  */
 export async function probeToken(
   token: string,
-  opts: { fetch: FetchLike; baseUrl: string; timeoutMs?: number },
+  opts: { fetch: FetchLike; baseUrl: string; timeoutMs?: number; onResponse?: (d: ProbeDiag) => void },
 ): Promise<ProbeResult> {
   const timeoutMs = opts.timeoutMs ?? 15_000
   const ctl = new AbortController()
@@ -100,6 +109,7 @@ export async function probeToken(
 
   const h = res.headers
   const httpStatus = res.status
+  opts.onResponse?.({ httpStatus, unified: UNIFIED_NAMES.filter((n) => h.get(PREFIX + n) !== null) })
   if (h.get(PREFIX + '5h-utilization') !== null) {
     const fiveHour = windowOf(h, '5h')
     const sevenDay = windowOf(h, '7d')

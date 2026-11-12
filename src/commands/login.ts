@@ -143,6 +143,10 @@ export async function runLogin(ctx: Ctx, a: LoginArgs, io: LoginIO = defaultIO()
       onUrl: (url) => say(`Autorize no navegador com a conta "${a.account}" (clique em Autorizar). Se ele não abriu, use este link:\n${url}\n\nEsperando o login…\n`),
     })
     say(`conta ${r.account} salva (token em tokens/${r.account}.json, 600${r.created ? '; conta registrada' : ''})\n`)
+    if (r.usageUnreadable) {
+      const u = r.usageUnreadable
+      say(`⚠ a API aceitou o token, mas não consegui ler o uso desta conta (HTTP ${u.httpStatus}; cabeçalhos de uso: ${u.unified.length > 0 ? u.unified.join(', ') : 'nenhum'})\n  ela fica fora da troca automática até uma medição funcionar; confira com \`sb usage\`\n`)
+    }
     if (r.attached && a.attach) {
       say(r.attached.length > 0 ? `anexada ao mux ${a.attach.mux} (${r.attached.join(', ')})\n` : `já estava assim no mux ${a.attach.mux}\n`)
     }

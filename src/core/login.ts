@@ -9,7 +9,7 @@ import type { Ctx } from './ctx.js'
 import { EXIT, SbError } from './errors.js'
 import { acquirePidFile, peekPidFile, releasePidFile, withLock } from './fsx.js'
 import { assertSafeName, loginLockFile, logFile, tokenFile } from './paths.js'
-import { probeToken, type ProbeResult } from './probe.js'
+import { probeToken, type ProbeDiag, type ProbeResult } from './probe.js'
 import { KEYCHAIN } from './schema.js'
 import { hasToken, saveToken } from './tokens.js'
 
@@ -374,6 +374,8 @@ export interface LoginResult {
   account: string
   created: boolean
   attached?: string[]
+  /** A API aceitou o token mas a sonda não leu o uso (o que ela devolveu, sem token): a conta não entra na troca automática até medir. */
+  usageUnreadable?: ProbeDiag
 }
 
 /** `sb attach <conta> <mux> [--pool|--at N] [--preferred]` equivalente ao spec, para mensagens. */
@@ -442,19 +444,33 @@ async function candidatesFor(ctx: Ctx, o: LoginOpts): Promise<string[]> {
   )
 }
 
-/** O 1º candidato com sonda `ok` (401/403, rede e respostas estranhas não passam: nada é salvo). */
-async function firstValid(ctx: Ctx, candidates: string[]): Promise<string> {
+const diagText = (d: ProbeDiag): string => `HTTP ${d.httpStatus}; cabeçalhos de uso: ${d.unified.length > 0 ? d.unified.join(', ') : 'nenhum'}`
+
+/**
+ * O 1º candidato que a API AUTENTICOU. Validar o login é saber se o token entra, não se dá para ler o uso:
+ * sonda `ok` passa; HTTP 200 e 429 também passam (a API aceitou o token), mesmo sem os cabeçalhos de uso —
+ * aí o resultado leva `usageUnreadable` e a conta fica fora da troca automática até a medição funcionar.
+ * 401/403, rede e o resto (5xx, 4xx que não é limite) não passam: nada é salvo, e o erro diz o que a API devolveu.
+ */
+async function firstValid(ctx: Ctx, candidates: string[]): Promise<{ token: string; usageUnreadable?: ProbeDiag }> {
   const baseUrl = ctx.env.SWITCHBOARD_API_BASE ?? 'https://api.anthropic.com'
   let last: ProbeResult | undefined
+  let lastDiag: ProbeDiag | undefined
   for (const token of candidates) {
     ctx.log('login', 'validando')
-    const r = await probeToken(token, { fetch: ctx.fetch, baseUrl })
-    if (r.ok) return token
+    let diag: ProbeDiag | undefined
+    const r = await probeToken(token, { fetch: ctx.fetch, baseUrl, onResponse: (d) => (diag = d) })
+    if (r.ok) return { token }
+    if (diag && (diag.httpStatus === 200 || diag.httpStatus === 429)) {
+      ctx.log('login', `token aceito pela API, mas o uso não deu para ler (${diagText(diag)})`)
+      return { token, usageUnreadable: diag }
+    }
     last = r
+    lastDiag = diag
   }
   if (last && !last.ok && last.error === 'dead-token') throw new SbError('o token não autenticou (a API o recusou): nada foi salvo', EXIT.CHECK_FAILED, '  tente de novo; se persistir, `sb login <conta> --terminal`')
   if (last && !last.ok && last.error === 'network') throw new SbError('não consegui validar o token (sem resposta da API): nada foi salvo', EXIT.CHECK_FAILED, '  confira a rede e tente de novo')
-  throw new SbError('a API respondeu algo inesperado ao validar o token: nada foi salvo', EXIT.CHECK_FAILED)
+  throw new SbError('a API respondeu algo inesperado ao validar o token: nada foi salvo', EXIT.CHECK_FAILED, `  ${lastDiag ? diagText(lastDiag) : 'sem resposta legível'}`)
 }
 
 /**
@@ -517,9 +533,9 @@ export async function login(ctx: Ctx, account: string, o: LoginOpts): Promise<Lo
     if (candidates.length === 0) {
       throw new SbError('não consegui capturar o token do claude', EXIT.CHECK_FAILED, `  rode \`sb login ${account} --terminal\` e cole o token`)
     }
-    const token = await firstValid(ctx, candidates)
+    const { token, usageUnreadable } = await firstValid(ctx, candidates)
     const created = await saveAndRegister(ctx, account, token, o)
-    const result: LoginResult = { account, created }
+    const result: LoginResult = { account, created, ...(usageUnreadable && { usageUnreadable }) }
     if (o.attach) {
       ctx.log('login', 'attach')
       try {
