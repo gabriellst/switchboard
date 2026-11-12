@@ -314,7 +314,7 @@ Todos que produzem dados aceitam `--json`, que nunca traz token (e passa por uma
 | `sb watch [--once [--json]]` | o laço; `--once` faz um ciclo (não grava o batimento) |
 | `sb install [--simular] [--json]` | grava plist, wrapper e `/sb`, liga a linha do zshrc, carrega o LaunchAgent; idempotente |
 | `sb doctor [--fix] [--json]` | seção 11 |
-| `sb migrate [--simular] [--finish] [--json]` | seção 12 |
+| `sb migrate [--simular] [--finish] [--json]` | seção 12 `--manter-config`: não importa contas nem cria muxes (nem os de keychain do `excluir`); exige config com mux e `default`; só reaponta as sessões pelos muxes existentes, troca o terminal e instala. |
 
 Opção desconhecida é recusada em todo comando e subcomando (exit 3, mensagem com o nome da opção, antes de
 qualquer efeito): o citty as ignora em silêncio, então `guarded` (`src/commands/guard.ts`) compara os `rawArgs`

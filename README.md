@@ -26,11 +26,11 @@ rodando, e interromper o trabalho para trocar de conta seria pior que o limite.
 Ainda não está no npm: a instalação é pelo tarball do Release no GitHub.
 
 ```bash
-npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.3/switchboard-0.1.3.tgz
+npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.4/switchboard-0.1.4.tgz
 # ou
-bun add -g https://github.com/gabriellst/switchboard/releases/download/v0.1.3/switchboard-0.1.3.tgz
+bun add -g https://github.com/gabriellst/switchboard/releases/download/v0.1.4/switchboard-0.1.4.tgz
 
-sb --version                         # 0.1.3
+sb --version                         # 0.1.4
 ```
 
 Requer Node ≥ 20 (funciona sob bun também) e o `claude` no `PATH`. Foi feito para macOS: o
@@ -282,10 +282,13 @@ Roda nesta ordem:
 
 ```bash
 # 1. instalar o sb (uma vez)
-npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.3/switchboard-0.1.3.tgz
+npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.4/switchboard-0.1.4.tgz
 
 # 2. ver o plano; não grava nada nem para nenhum processo
 sb migrate --simular
+#    já montou contas e muxes no sb? `--manter-config` não importa conta nem cria mux:
+#    só reaponta as sessões do claude-conta para os SEUS muxes e troca o terminal
+#    sb migrate --manter-config --simular
 
 # 3. aplicar (já roda o `sb install`); depois abra um terminal novo
 sb migrate

@@ -346,7 +346,8 @@ export function renderMigrationPlan(plan: MigrationPlan, home: string): string {
   if (plan.tokens.length > 0) {
     lines.push('Contas a importar (para tokens/, modo 600):')
     for (const t of plan.tokens) lines.push(`  ${t.account.padEnd(14)} ← ${short(t.from)}`)
-  } else lines.push('Contas a importar: nenhuma (já importadas, ou o claude-conta não tem conta com token)')
+  } else if (plan.keepConfig) lines.push('Contas a importar: nenhuma (--manter-config: as contas e os muxes do sb ficam como estão)')
+  else lines.push('Contas a importar: nenhuma (já importadas, ou o claude-conta não tem conta com token)')
   for (const g of plan.likelyDuplicates) lines.push(`  ⚠ ${g.join(' e ')}: mesmo token (provável duplicata; contam como uma conta no total do pool)`)
   lines.push('', `Muxes (default: ${plan.config.default ?? '—'}):`)
   for (const [name, m] of Object.entries(plan.config.mux)) {

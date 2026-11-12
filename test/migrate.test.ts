@@ -13,6 +13,8 @@ import { applyMigration, finishMigration, planMigration, readLegacyToken, type M
 import { muxLink, pinLink, tokenFile } from '../src/core/paths.js'
 import { applyPending } from '../src/core/pin.js'
 import { readRuntime, writeRuntime } from '../src/core/runtime.js'
+import { pointMux } from '../src/core/links.js'
+import { ensureState, saveToken } from '../src/core/tokens.js'
 import { filesUnder, type AgentFixture, type Sandbox, sandbox } from './helpers.js'
 
 const NOW = 1_800_000_000_000
@@ -396,7 +398,7 @@ describe('planMigration', () => {
       expect(Object.keys(plan.config.mux).sort()).toEqual(['berzerk', 'bk'])
       expect(plan.warnings.some((x) => x.includes('berzerk'))).toBe(true)
       // a view continua precisando ser reaberta, e com o mux do keychain
-      expect(plan.reopen.sort()).toEqual(['sb agents berzerk', 'sb agents bk'])
+      expect(plan.reopen.sort()).toEqual(['sb agents berzerk', 'sb agents berzerk --cwd ~/p/berzerk/sub', 'sb agents bk'])
     })
   })
 
@@ -1168,5 +1170,84 @@ describe('runMigrate (comando)', () => {
     const w = world()
     const e = await catching(() => runMigrate(rig(w.sb).ctx, { finish: true }, { install: installFor(w.sb) }))
     expect(e.exit).toBe(EXIT.CHECK_FAILED)
+  })
+})
+
+describe('sb migrate --manter-config (o usuário já montou contas e muxes no sb)', () => {
+  const OWN = `{
+  // a config que o usuário montou à mão
+  "switchboard": 1,
+  "accounts": { "nova": {} },
+  "default": "tudo",
+  "mux": { "tudo": { "root": "~/p", "account": "nova", "accounts": ["nova"], "pool": ["nova"] } }
+}
+`
+  /** Legado falso + a config PRÓPRIA do sb (uma conta `nova`, um mux `tudo` em ~/p que é o default). */
+  function ownWorld(over: Parameters<typeof world>[0] = {}): World {
+    const w = world(over)
+    ensureState(w.sb.paths)
+    saveToken(w.sb.paths, 'nova', fakeToken('n'))
+    mkdirSync(dirname(w.sb.paths.configFile), { recursive: true })
+    writeFileSync(w.sb.paths.configFile, OWN)
+    pointMux(w.sb.paths, 'tudo', 'nova')
+    return w
+  }
+
+  test('plano: nenhuma conta importada, nenhum mux criado (nem o do keychain do excluir); sessões vão para o mux que já existe', async () => {
+    const w = ownWorld()
+    const plan = await planMigration(rig(w.sb).ctx, { keepConfig: true })
+    expect(plan.tokens).toEqual([])
+    expect(Object.keys(plan.config.mux)).toEqual(['tudo'])
+    expect(Object.keys(plan.config.accounts)).toEqual(['nova'])
+    expect(plan.config.default).toBe('tudo')
+    const to = Object.fromEntries(plan.rewrites.map((r) => [r.jobId, r.to]))
+    expect(to[ID_STOP_ATIVA]).toBe(muxLink(w.sb.paths, 'tudo'))
+    expect(to[ID_LIVE_ATIVA]).toBe(muxLink(w.sb.paths, 'tudo'))
+    // fixas numa conta que o sb não tem: não dá para reapontar; ficam avisadas (e travam o --finish)
+    expect(to[ID_STOP_PIN]).toBeUndefined()
+    expect(plan.warnings.join('\n')).toContain(ID_STOP_PIN)
+  })
+
+  test('aplicar: tokens/ só tem o que o usuário já tinha, a config fica byte a byte, a parada é reescrita e o zshrc trocado', async () => {
+    const w = ownWorld()
+    const r = rig(w.sb)
+    const plan = await planMigration(r.ctx, { keepConfig: true })
+    await applyMigration(r.ctx, plan, { install: installFor(w.sb) })
+    expect(readdirSync(join(w.sb.paths.stateDir, 'tokens')).sort()).toEqual(['keychain.json', 'nova.json'])
+    expect(readFileSync(w.sb.paths.configFile, 'utf8')).toBe(OWN)
+    expect(flagsNow(w.sb, ID_STOP_ATIVA)).toContain(muxLink(w.sb.paths, 'tudo'))
+    expect(flagsNow(w.sb, ID_STOP_ATIVA).join(' ')).not.toContain('contas/ativa.json')
+    expect(readRuntime(w.sb.paths).pending.map((i) => i.jobId)).toContain(ID_LIVE_ATIVA)
+    const zshrc = readFileSync(join(homeOf(w.sb), '.zshrc'), 'utf8')
+    expect(zshrc).not.toContain('# claude-conta')
+    expect(zshrc).toContain('# switchboard')
+    expect(leaks(w.sb)).toEqual([])
+  })
+
+  test('sem config do sb → exit 3 (não há o que manter)', async () => {
+    const w = world()
+    const e = await catching(() => planMigration(rig(w.sb).ctx, { keepConfig: true }))
+    expect(e?.exit).toBe(EXIT.USAGE)
+  })
+
+  test('pela CLI: `sb migrate --manter-config --simular` não importa conta e não grava nada', () => {
+    const w = ownWorld()
+    const before = snapshot(homeOf(w.sb), skipFakeClaude)
+    const r = w.sb.runSb(['migrate', '--manter-config', '--simular'])
+    expect(r.code).toBe(0)
+    expect(r.stdout).not.toContain('gabriel        ←')
+    expect(r.stdout).toContain('tudo')
+    expect(r.stdout).not.toMatch(TOKEN_ANY)
+    expect(snapshot(homeOf(w.sb), skipFakeClaude)).toEqual(before)
+  })
+
+  test('--finish depois: sem conta importada do claude-conta, mas com conta própria no sb, não é recusado por isso', async () => {
+    const w = ownWorld({ noSessions: true })
+    addSession(w.sb, ID_STOP_ATIVA, ['--settings', join(contasOf(w.sb), 'ativa.json')], 'stopped', { cwd: join(homeOf(w.sb), 'p', 'bk') })
+    const r = rig(w.sb)
+    await applyMigration(r.ctx, await planMigration(r.ctx, { keepConfig: true }), { install: installFor(w.sb) })
+    const fin = await finishMigration(rig(w.sb).ctx)
+    expect(existsSync(contasOf(w.sb))).toBe(false)
+    expect(fin.moved.length).toBeGreaterThan(0)
   })
 })

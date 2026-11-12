@@ -48,6 +48,8 @@ const fixasDir = (p: Paths): string => join(p.claudeDir, 'contas-fixas')
 const contaMdFile = (p: Paths): string => join(p.claudeDir, 'commands', 'conta.md')
 
 export interface MigrationPlan {
+  /** `--manter-config`: nenhuma conta importada e nenhum mux criado; só sessões, terminal e install */
+  keepConfig?: true
   /** contas a gravar em `tokens/`: de onde (só o caminho) e com que nome; NUNCA o valor */
   tokens: Array<{ from: string; account: string }>
   /** contas que parecem a mesma (mesmo token); o aplicar acrescenta as de mesma impressão numa medição */
@@ -262,7 +264,13 @@ function freshBackupDir(ctx: Ctx, prefix: string): string {
  * `~/.claude/contas` (exit 3), sem nenhuma view `claude agents --cwd` aberta e sem `default` na config (exit 3: o mux
  * `default` não pode ser o do keychain), config do sb inválida (exit 2), `claude agents` ilegível (exit 4).
  */
-export async function planMigration(ctx: Ctx): Promise<MigrationPlan> {
+/** Opções do plano. `keepConfig`: o usuário já montou contas e muxes no `sb`; a migração só reaponta as sessões e troca o terminal. */
+export interface PlanOpts {
+  keepConfig?: boolean
+}
+
+export async function planMigration(ctx: Ctx, opts: PlanOpts = {}): Promise<MigrationPlan> {
+  const keep = opts.keepConfig === true
   const { paths } = ctx
   const home = paths.home
   if (!isDir(legacyDir(paths))) {
@@ -270,10 +278,14 @@ export async function planMigration(ctx: Ctx): Promise<MigrationPlan> {
   }
   const warnings: string[] = []
   const existing: Config | null = existsSync(paths.configFile) ? await loadConfig(paths) : null
+  if (keep && (existing === null || existing.default === undefined || Object.keys(existing.mux).length === 0)) {
+    throw usageError('`--manter-config` precisa de uma config do sb com pelo menos um mux e um `default`', '  crie os muxes (`sb mux add …`, `sb mux set <nome> --default`) ou rode `sb migrate` sem `--manter-config`')
+  }
 
   // contas: o valor do token só vive neste Map, em memória
   const secrets = new Map<string, string>()
-  for (const name of legacyAccountNames(paths)) {
+  // com `keepConfig` nenhuma conta do claude-conta entra: as do sb já são as que valem
+  for (const name of keep ? [] : legacyAccountNames(paths)) {
     if (!NAME_RE.test(name)) {
       warnings.push(`conta ${JSON.stringify(name)} ignorada: o nome tem que ser minúsculas, números, - e _ (até 32); renomeie o arquivo e rode de novo`)
       continue
@@ -290,7 +302,7 @@ export async function planMigration(ctx: Ctx): Promise<MigrationPlan> {
     secrets.set(name, token)
   }
   const importable = [...secrets.keys()]
-  if (importable.length === 0) warnings.push('nenhuma conta com token em ~/.claude/contas: os muxes ficam no keychain')
+  if (importable.length === 0 && !keep) warnings.push('nenhuma conta com token em ~/.claude/contas: os muxes ficam no keychain')
 
   const byToken = new Map<string, string[]>()
   for (const [name, token] of secrets) byToken.set(token, [...(byToken.get(token) ?? []), name])
@@ -306,7 +318,7 @@ export async function planMigration(ctx: Ctx): Promise<MigrationPlan> {
   let active = activeAccount(paths, importable)
   if (active === null) {
     active = importable[0] ?? KEYCHAIN
-    warnings.push(`não consegui saber a conta ativa (ativa.json ausente, pendurado ou apontando para uma conta não importada): usei "${active}"`)
+    if (!keep) warnings.push(`não consegui saber a conta ativa (ativa.json ausente, pendurado ou apontando para uma conta não importada): usei "${active}"`)
   }
   const viewAccounts = active === KEYCHAIN ? [KEYCHAIN, ...importable] : importable
   const pool = active === KEYCHAIN ? [] : [active, ...importable.filter((a) => a !== active)]
@@ -324,7 +336,8 @@ export async function planMigration(ctx: Ctx): Promise<MigrationPlan> {
     if (!exists(muxLink(paths, mux)) && (m.account === KEYCHAIN || registered.has(m.account)) && usable(m.account) && !links.some((l) => l.mux === mux)) links.push({ mux, account: m.account })
   }
 
-  const excluded = excludedRoots(paths, warnings)
+  // com `keepConfig` o `excluir` do claude-conta não vira mux de keychain: os muxes do usuário já dizem de quem é cada pasta
+  const excluded = keep ? [] : excludedRoots(paths, warnings)
   for (const e of excluded) {
     const have = existingRoots.get(e.norm)
     if (have !== undefined) {
@@ -373,6 +386,7 @@ export async function planMigration(ctx: Ctx): Promise<MigrationPlan> {
       covered(have)
       continue
     }
+    if (keep) continue // nenhum mux novo: a view cai no mux que já é dono da pasta (ou no default)
     const base = muxNameFrom(v.norm)
     const name = allocateName(base, taken, 'mux')
     if (base !== name) warnings.push(`a pasta ${root} virou o mux "${name}" (o nome da pasta colide ou não serve como nome de mux)`)
@@ -423,7 +437,12 @@ export async function planMigration(ctx: Ctx): Promise<MigrationPlan> {
   }
 
   const reopen = new Set<string>()
-  for (const v of views) reopen.add(`sb agents ${resolveMuxForDir(config, v.norm, home)}`)
+  for (const v of views) {
+    const mux = resolveMuxForDir(config, v.norm, home)
+    // view numa pasta que não é a raiz do mux (várias abas no mesmo mux): reabre com --cwd
+    const atRoot = normalizeRoot(config.mux[mux]!.root, home) === v.norm
+    reopen.add(atRoot ? `sb agents ${mux}` : `sb agents ${mux} --cwd ${tildify(v.norm, home)}`)
+  }
 
   const zshrcText = readIfExists(paths.zshrc)
   const oldLines = (zshrcText ?? '').split('\n').filter((l) => l.includes(OLD_MARK))
@@ -440,6 +459,7 @@ export async function planMigration(ctx: Ctx): Promise<MigrationPlan> {
     reopen: [...reopen].sort(),
     links,
     warnings,
+    ...(keep && { keepConfig: true as const }),
   }
 }
 
@@ -685,6 +705,17 @@ export interface FinishResult {
  *     settings do claude-conta;
  *   - o `ps` falhou (sem a tabela não dá para dizer que não há view legada).
  */
+/** Há alguma conta (que não o keychain) com token utilizável em tokens/? Lê só os nomes dos arquivos e o `hasToken`. */
+function sbHasAccountWithToken(paths: Paths): boolean {
+  let names: string[] = []
+  try {
+    names = readdirSync(join(paths.stateDir, 'tokens')).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5))
+  } catch {
+    return false
+  }
+  return names.some((n) => n !== KEYCHAIN && NAME_RE.test(n) && hasToken(paths, n))
+}
+
 function legacyBlockers(ctx: Ctx): string[] {
   const { paths } = ctx
   const lines: string[] = []
@@ -693,8 +724,10 @@ function legacyBlockers(ctx: Ctx): string[] {
     lines.push(`o ${paths.zshrc} ainda tem a linha "# claude-conta": sem ~/.claude/contas todo \`claude\` novo rodaria no keychain (rode \`sb migrate\`)`)
   }
   if (!existsSync(paths.configFile)) lines.push(`não há config do sb (${paths.configFile}): a migração não foi aplicada (rode \`sb migrate\`)`)
+  // prova de que o sb está montado: alguma conta com token em tokens/ (importada do claude-conta, ou logada pelo usuário
+  // no caso do `--manter-config`); sem nenhuma, mover ~/.claude/contas deixaria a máquina sem conta fora do keychain
   const legacyNames = legacyAccountNames(paths).filter((n) => NAME_RE.test(n) && n !== KEYCHAIN && readLegacyToken(paths, n) !== null)
-  if (legacyNames.length > 0 && !legacyNames.some((n) => loadSecret(paths, n) !== null)) {
+  if (legacyNames.length > 0 && !legacyNames.some((n) => loadSecret(paths, n) !== null) && !sbHasAccountWithToken(paths)) {
     lines.push('nenhuma conta do claude-conta foi importada para tokens/ do sb: a migração não foi aplicada (rode `sb migrate`)')
   }
   const { sessions, unreadable } = loadSessionsWithWarnings(ctx)
