@@ -2,7 +2,7 @@ import { defineCommand } from 'citty'
 import { usageArgs } from './commands/args.js'
 
 export const main = defineCommand({
-  meta: { name: 'sb', version: '0.1.1', description: 'Contas do Claude Code por pasta, com troca automática ao bater o limite' },
+  meta: { name: 'sb', version: '0.1.2', description: 'Contas do Claude Code por pasta, com troca automática ao bater o limite' },
   // `sb` sem subcomando = `sb usage`; os args do usage ficam aqui também para o citty saber que
   // `--every 30` leva valor (senão tomaria o "30" por nome de subcomando).
   args: usageArgs,

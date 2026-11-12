@@ -3,7 +3,7 @@ import type { FetchLike } from './ctx.js'
 export interface Window {
   /** fração 0–1, repassada como veio (sem clamp) */
   utilization: number
-  /** epoch em segundos */
+  /** epoch em segundos; 0 = a API não mandou esta janela (não há janela ativa) */
   resetsAt: number
   status: string
 }
@@ -59,6 +59,11 @@ function windowOf(h: Headers, w: '5h' | '7d'): Window | undefined {
   return { utilization, resetsAt, status }
 }
 
+/** Janela que a API não mandou: sem uso e sem reset (`resetsAt` 0 = não há janela ativa). */
+const ABSENT: Window = { utilization: 0, resetsAt: 0, status: 'allowed' }
+
+const hasAny = (h: Headers, w: '5h' | '7d'): boolean => ['utilization', 'reset', 'status'].some((k) => h.get(`${PREFIX}${w}-${k}`) !== null)
+
 /** Erro derivado só do status HTTP (sem dados de uso aproveitáveis nos cabeçalhos). */
 function fromHttpStatus(httpStatus: number): ProbeResult {
   if (httpStatus === 401 || httpStatus === 403) return { ok: false, error: 'dead-token', httpStatus }
@@ -110,9 +115,13 @@ export async function probeToken(
   const h = res.headers
   const httpStatus = res.status
   opts.onResponse?.({ httpStatus, unified: UNIFIED_NAMES.filter((n) => h.get(PREFIX + n) !== null) })
-  if (h.get(PREFIX + '5h-utilization') !== null) {
-    const fiveHour = windowOf(h, '5h')
-    const sevenDay = windowOf(h, '7d')
+  // Uma janela pode vir AUSENTE por inteiro (visto em 12/11/2026: conta sem janela de 5 h ativa responde só com os 7d-*):
+  // ausente = sem uso nela (0 %, sem reset, `resetsAt` 0). Janela INCOMPLETA (parte dos cabeçalhos) continua sendo erro.
+  const has5 = hasAny(h, '5h')
+  const has7 = hasAny(h, '7d')
+  if (has5 || has7) {
+    const fiveHour = has5 ? windowOf(h, '5h') : ABSENT
+    const sevenDay = has7 ? windowOf(h, '7d') : ABSENT
     const status = str(h, 'status')
     const resetsAt = num(h, 'reset')
     // Cabeçalhos incompletos ou ilegíveis: nada de resultado parcial nem NaN, mas o sinal

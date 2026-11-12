@@ -134,7 +134,39 @@ describe('probeToken', () => {
     expect(r).toMatchObject({ ok: true, fiveHour: { utilization: 24 } })
   })
 
-  test('5h presente e 7d ausente → unexpected', async () => {
+  test('janela de 5h AUSENTE por inteiro (resposta real de conta sem janela ativa) → ok, 5h = 0% sem reset', async () => {
+    const real = {
+      'anthropic-ratelimit-unified-7d-utilization': '0.8',
+      'anthropic-ratelimit-unified-7d-reset': '1794884400',
+      'anthropic-ratelimit-unified-7d-status': 'allowed_warning',
+      'anthropic-ratelimit-unified-7d-surpassed-threshold': '0.75',
+      'anthropic-ratelimit-unified-status': 'allowed_warning',
+      'anthropic-ratelimit-unified-reset': '1794884400',
+      'anthropic-ratelimit-unified-representative-claim': 'seven_day',
+      'anthropic-ratelimit-unified-overage-status': 'rejected',
+    }
+    expect(await probe(200, real)).toEqual({
+      ok: true,
+      fiveHour: { utilization: 0, resetsAt: 0, status: 'allowed' },
+      sevenDay: { utilization: 0.8, resetsAt: 1794884400, status: 'allowed_warning' },
+      status: 'allowed_warning',
+      resetsAt: 1794884400,
+      representativeClaim: 'seven_day',
+      overageStatus: 'rejected',
+    })
+  })
+
+  test('janela de 7d AUSENTE por inteiro → ok, 7d = 0% sem reset', async () => {
+    const r = await probe(200, without('anthropic-ratelimit-unified-7d-utilization', 'anthropic-ratelimit-unified-7d-reset', 'anthropic-ratelimit-unified-7d-status'))
+    expect(r).toMatchObject({ ok: true, fiveHour: OK.fiveHour, sevenDay: { utilization: 0, resetsAt: 0, status: 'allowed' } })
+  })
+
+  test('as duas janelas ausentes (só status/reset globais) → unexpected', async () => {
+    const r = await probe(200, { 'anthropic-ratelimit-unified-status': 'allowed', 'anthropic-ratelimit-unified-reset': '1762195800' })
+    expect(r).toEqual({ ok: false, error: 'unexpected', httpStatus: 200 })
+  })
+
+  test('5h presente e 7d INCOMPLETA (um cabeçalho faltando) → unexpected', async () => {
     for (const k of ['utilization', 'reset', 'status']) {
       const r = await probe(200, without(`anthropic-ratelimit-unified-7d-${k}`))
       expect(r).toEqual({ ok: false, error: 'unexpected', httpStatus: 200 })

@@ -74,7 +74,7 @@ São restrições, não suposições. O texto completo está no design (§3) e n
   da requisição; nenhum resultado, erro ou log o carrega.
 - **Resultado**: `ok` (duas janelas `{utilization 0–1, resetsAt epoch s, status}`, mais `status` e
   `resetsAt` gerais) ou erro: `dead-token` (401/403), `rate-limited` (429 **sem** os cabeçalhos unified; com eles é uma medição normal), `network`, `unexpected`,
-  e `no-token` (conta sem token; sem rede). Cabeçalhos incompletos mantêm o sinal HTTP. O `usage.json` guarda em
+  e `no-token` (conta sem token; sem rede). Cabeçalhos incompletos mantêm o sinal HTTP. Uma janela **ausente por inteiro** não é erro: a API omite os `5h-*` (ou os `7d-*`) quando não há janela ativa (visto em 12/11/2026), e ela entra como 0 % sem reset (`resetsAt` 0; o painel mostra "sem janela ativa"). As duas ausentes → `unexpected`. O `usage.json` guarda em
   `rate-limited` o campo `streak`: quantas sondas seguidas dessa conta vieram assim (qualquer outra medição zera).
 - **Cache**: `sb usage` reaproveita medições de até 60 s (`sb accounts` nunca mede: só lê o `usage.json`); o `watch` sonda quando a
   medição mais nova passa de `swap.probeEvery`, ou há conta nunca medida. `no-token` não fica preso

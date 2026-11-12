@@ -26,11 +26,11 @@ rodando, e interromper o trabalho para trocar de conta seria pior que o limite.
 Ainda não está no npm: a instalação é pelo tarball do Release no GitHub.
 
 ```bash
-npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.1/switchboard-0.1.1.tgz
+npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.2/switchboard-0.1.2.tgz
 # ou
-bun add -g https://github.com/gabriellst/switchboard/releases/download/v0.1.1/switchboard-0.1.1.tgz
+bun add -g https://github.com/gabriellst/switchboard/releases/download/v0.1.2/switchboard-0.1.2.tgz
 
-sb --version                         # 0.1.1
+sb --version                         # 0.1.2
 ```
 
 Requer Node ≥ 20 (funciona sob bun também) e o `claude` no `PATH`. Foi feito para macOS: o
@@ -280,7 +280,7 @@ Roda nesta ordem:
 
 ```bash
 # 1. instalar o sb (uma vez)
-npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.1/switchboard-0.1.1.tgz
+npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.2/switchboard-0.1.2.tgz
 
 # 2. ver o plano; não grava nada nem para nenhum processo
 sb migrate --simular

@@ -60,6 +60,17 @@ const DESIGN_PANEL_DATA: PanelData = {
 const render = (d: PanelData, nowMs = NOW): string => renderPanel(d, { nowMs, timeZone: TZ })
 
 describe('renderPanel', () => {
+  test('janela sem reset (a API não a mandou) → "sem janela ativa", nunca uma data de 1970', () => {
+    const m: Measurement = { ok: true, fiveHour: { utilization: 0, resetsAt: 0, status: 'allowed' }, sevenDay: { utilization: 0.8, resetsAt: RESET_7D, status: 'allowed_warning' }, status: 'allowed_warning', resetsAt: RESET_7D, measuredAt: NOW - 120_000 }
+    const d: PanelData = { ...DESIGN_PANEL_DATA, accounts: [{ name: 'gabriel', measurement: m, muxes: [{ mux: 'bk', role: 'preferred', position: 1 }] }] }
+    const out = render(d)
+    expect(out).toContain('sem janela ativa')
+    expect(out).toMatch(/sem janela ativa {2,}reseta 06\/11/) // a coluna alarga para caber o rótulo
+    expect(out).not.toMatch(/reseta (31\/12|01\/01|21:00)/)
+    const acc = renderAccounts([{ name: 'gabriel', measurement: m, muxes: [], token: 'ok', attached: false } as never], { nowMs: NOW, timeZone: TZ })
+    expect(acc).toContain('5h 0% (sem janela ativa)')
+  })
+
   test('render bate com o painel do design', () => {
     const out = render(DESIGN_PANEL_DATA)
     expect(out).toContain('gabriel   ░░░░░░░░░░  1%  ██░░░░░░░░ 15%   bk (preferida) · pessoal (2º do pool)')

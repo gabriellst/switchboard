@@ -75,10 +75,15 @@ function agoText(measuredAt: number | null, nowMs: number): string {
   return h < 24 ? `medido há ${h} h` : `medido há ${Math.round(h / 24)} d`
 }
 
+/** `reseta <quando>`; `resetsAt` 0 é a janela que a API não mandou (não há janela ativa): não tem reset a mostrar. */
+function resetLabel(epochS: number, nowMs: number, timeZone?: string): string {
+  return epochS === 0 ? 'sem janela ativa' : `reseta ${formatReset(epochS, nowMs, timeZone)}`
+}
+
 export function renderPanel(d: PanelData, opts: RenderOpts): string {
   const { nowMs, timeZone } = opts
   const lines: string[] = []
-  const reset = (epochS: number): string => `reseta ${formatReset(epochS, nowMs, timeZone)}`
+  const reset = (epochS: number): string => resetLabel(epochS, nowMs, timeZone)
   const rule = '─'.repeat(58)
 
   const activeOverride = (m: PanelData['mux'][number]): { account: string; until: number } | undefined =>
@@ -93,8 +98,9 @@ export function renderPanel(d: PanelData, opts: RenderOpts): string {
   // larguras: o mínimo do design, ampliado se um nome ou uma barra de 100% não couber
   const rows = d.accounts.filter((a) => !a.sameAs || !d.accounts.some((r) => r.name === a.sameAs))
   const nameW = Math.max(10, ...d.accounts.map((a) => a.name.length + 2), ...d.mux.map((m) => m.name.length + 2))
-  const cells5 = rows.map((a) => (a.measurement?.ok ? bar(a.measurement.fiveHour.utilization).length : 0))
-  const cells7 = rows.map((a) => (a.measurement?.ok ? bar(a.measurement.sevenDay.utilization).length : 0))
+  // a largura da coluna cobre a barra E o rótulo da linha de baixo ("sem janela ativa" é mais largo que a barra)
+  const cells5 = rows.map((a) => (a.measurement?.ok ? Math.max(bar(a.measurement.fiveHour.utilization).length, reset(a.measurement.fiveHour.resetsAt).length) : 0))
+  const cells7 = rows.map((a) => (a.measurement?.ok ? Math.max(bar(a.measurement.sevenDay.utilization).length, reset(a.measurement.sevenDay.resetsAt).length) : 0))
   const w5 = Math.max(14, ...cells5)
   const w7 = Math.max(14, ...cells7)
   const spanW = w5 + 2 + w7 + 3
@@ -153,7 +159,7 @@ function usageSummary(a: AccountInfo, opts: RenderOpts): string {
   if (a.sameAs) return `mesma conta que ${a.sameAs}`
   const m = a.measurement
   if (!m?.ok) return failureText(m)
-  const r = (epochS: number): string => `reseta ${formatReset(epochS, opts.nowMs, opts.timeZone)}`
+  const r = (epochS: number): string => resetLabel(epochS, opts.nowMs, opts.timeZone)
   return `5h ${pct(m.fiveHour.utilization)} (${r(m.fiveHour.resetsAt)}) · semanal ${pct(m.sevenDay.utilization)} (${r(m.sevenDay.resetsAt)})`
 }
 

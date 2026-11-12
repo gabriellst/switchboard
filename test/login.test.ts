@@ -382,10 +382,10 @@ describe('login()', () => {
     expect(readLog(sb)).not.toMatch(/sk-ant-/)
   })
 
-  test('200 com 5h mas sem 7d → token salvo; o aviso lista os cabeçalhos que vieram', async () => {
+  test('200 com a janela de 7d INCOMPLETA → token salvo; o aviso lista os cabeçalhos que vieram', async () => {
     const sb = withRef()
     fakeOutput(sb)
-    const partial = Object.fromEntries(Object.entries(H).filter(([k]) => !k.includes('-7d-')))
+    const partial = Object.fromEntries(Object.entries(H).filter(([k]) => !k.endsWith('-7d-utilization')))
     api = await fakeApi(() => new Response('{}', { status: 200, headers: partial }))
     const r = await login(ctxFor(sb, api), 'nova', { terminal: false })
     expect(existsSync(tokenFile(sb.paths, 'nova'))).toBe(true)
