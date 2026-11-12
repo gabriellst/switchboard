@@ -11,7 +11,7 @@ import { assertSafeName, muxLink, type Paths } from './paths.js'
 import { normalizeRoot } from './schema.js'
 
 export type LaunchOpts =
-  | { mux?: string; cwd: string; mode: 'agents' }
+  | { mux?: string; cwd: string; mode: 'agents'; /** `--cwd` do usuário, já absoluto: a pasta da view (padrão: o root do mux) */ dir?: string }
   | { mux?: string; cwd: string; mode: 'run'; args: string[] }
 
 export interface LaunchPlan {
@@ -23,7 +23,8 @@ export interface LaunchPlan {
 const isSettingsFlag = (a: string): boolean => a === '--settings' || a.startsWith('--settings=')
 
 /**
- * Puro: decide o mux e o argv do `claude`, sem tocar o disco. `agents` → `agents --cwd <root> --settings <link>`.
+ * Puro: decide o mux e o argv do `claude`, sem tocar o disco. `agents` → `agents --cwd <root> --settings <link>`
+ * (com `dir`, `--cwd <dir>`: uma aba por projeto dentro do mesmo mux).
  * `run` → `<args> --settings <link>`, com o `--settings` ANTES do primeiro `--` solto de `args` (depois dele tudo é
  * posicional para o claude: `-p -- texto --settings x` rodaria SEM o settings, no keychain, calado); sem `--` em
  * `args` vai no fim. Não vai na frente: com `enablePositionalOptions` uma opção da raiz não alcança subcomando.
@@ -37,11 +38,18 @@ export function launchArgs(cfg: Config, paths: Paths, o: LaunchOpts): LaunchPlan
   if (o.mode === 'run' && (split === -1 ? o.args : o.args.slice(0, split)).some(isSettingsFlag)) {
     throw new SbError('`--settings` não pode vir nos argumentos: o `sb` já passa o settings do mux', EXIT.USAGE, '  para outra conta, escolha outro mux (`sb run <mux> -- …`)')
   }
-  const mux = o.mux ?? resolveMuxForDir(cfg, o.cwd, paths.home)
+  const dir = o.mode === 'agents' ? o.dir : undefined
+  // com `--cwd`, quem decide o mux é a pasta do --cwd (não a pasta atual); com nome, os dois têm de concordar:
+  // as sessões dessa pasta são do mux dono dela (`sb which`), e uma view com o settings de outro as poria noutra conta
+  const owner = dir !== undefined ? resolveMuxForDir(cfg, dir, paths.home) : undefined
+  if (owner !== undefined && o.mux !== undefined && owner !== o.mux) {
+    throw new SbError(`a pasta ${dir} é do mux "${owner}", não de "${o.mux}"`, EXIT.USAGE, `  rode \`sb agents ${owner} --cwd ${dir}\` (ou sem o nome do mux)`)
+  }
+  const mux = o.mux ?? owner ?? resolveMuxForDir(cfg, o.cwd, paths.home)
   const m = cfg.mux[mux]
   if (!m) throw new SbError(`mux inexistente: "${mux}"`, EXIT.USAGE, `  muxes: ${Object.keys(cfg.mux).join(', ') || 'nenhum'}`)
   const link = muxLink(paths, mux)
-  if (o.mode === 'agents') return { mux, argv: ['agents', '--cwd', normalizeRoot(m.root, paths.home), '--settings', link] }
+  if (o.mode === 'agents') return { mux, argv: ['agents', '--cwd', dir ?? normalizeRoot(m.root, paths.home), '--settings', link] }
   const at = split === -1 ? o.args.length : split
   return { mux, argv: [...o.args.slice(0, at), '--settings', link, ...o.args.slice(at)] }
 }

@@ -47,6 +47,53 @@ describe('sb agents', () => {
     })
   })
 
+  test('`--cwd <pasta>`: a view abre nessa pasta (não no root), com o settings do mux nomeado', () => {
+    const sb = populatedSandbox()
+    const dir = join(rootBk(sb), 'projeto-a')
+    mkdirSync(dir, { recursive: true })
+    const r = sb.runSb(['agents', 'bk', '--cwd', dir], { env })
+    expect(r.code).toBe(0)
+    expect(sb.calls().at(-1)).toMatchObject({ argv: ['agents', '--cwd', dir, '--settings', muxLink(sb.paths, 'bk')], hasOauthEnv: false })
+  })
+
+  test('`--cwd` sem nome: o mux é o dono da pasta do --cwd (root mais profundo), não o da pasta atual', () => {
+    const sb = withDeep()
+    const dir = join(rootBk(sb), 'sub', 'x')
+    mkdirSync(dir, { recursive: true })
+    const r = sb.runSb(['agents', '--cwd', dir], { cwd: sb.dir })
+    expect(r.code).toBe(0)
+    expect(sb.calls().at(-1)?.argv).toEqual(['agents', '--cwd', dir, '--settings', muxLink(sb.paths, 'deep')])
+  })
+
+  test('`--cwd` aceita ~ e `--cwd=<pasta>`', () => {
+    const sb = populatedSandbox()
+    mkdirSync(join(rootBk(sb), 'projeto-a'), { recursive: true })
+    for (const form of [['--cwd', '~/bk/projeto-a'], ['--cwd=~/bk/projeto-a']]) {
+      expect(sb.runSb(['agents', 'bk', ...form]).code).toBe(0)
+      expect(sb.calls().at(-1)?.argv).toEqual(['agents', '--cwd', join(rootBk(sb), 'projeto-a'), '--settings', muxLink(sb.paths, 'bk')])
+    }
+  })
+
+  test('`--cwd` numa pasta que é de OUTRO mux → exit 3 dizendo o dono; claude não é chamado', () => {
+    const sb = withDeep()
+    const dir = join(rootBk(sb), 'sub')
+    mkdirSync(dir, { recursive: true })
+    const r = sb.runSb(['agents', 'bk', '--cwd', dir])
+    expect(r.code).toBe(EXIT.USAGE)
+    expect(r.stderr).toContain('deep')
+    expect(sb.calls()).toEqual([])
+  })
+
+  test('`--cwd` que não existe ou não é pasta → exit 3; claude não é chamado', () => {
+    const sb = populatedSandbox()
+    mkdirSync(rootBk(sb), { recursive: true })
+    writeFileSync(join(rootBk(sb), 'arquivo'), 'x')
+    for (const bad of [join(rootBk(sb), 'nao-existe'), join(rootBk(sb), 'arquivo')]) {
+      expect(sb.runSb(['agents', 'bk', '--cwd', bad]).code).toBe(EXIT.USAGE)
+    }
+    expect(sb.calls()).toEqual([])
+  })
+
   test('com nome, a pasta atual não conta: dentro do root de OUTRO mux usa o root e o settings do mux nomeado', () => {
     const sb = withDeep()
     mkdirSync(join(rootBk(sb), 'sub', 'x'), { recursive: true })

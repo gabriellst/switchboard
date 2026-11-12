@@ -26,11 +26,11 @@ rodando, e interromper o trabalho para trocar de conta seria pior que o limite.
 Ainda não está no npm: a instalação é pelo tarball do Release no GitHub.
 
 ```bash
-npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.2/switchboard-0.1.2.tgz
+npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.3/switchboard-0.1.3.tgz
 # ou
-bun add -g https://github.com/gabriellst/switchboard/releases/download/v0.1.2/switchboard-0.1.2.tgz
+bun add -g https://github.com/gabriellst/switchboard/releases/download/v0.1.3/switchboard-0.1.3.tgz
 
-sb --version                         # 0.1.2
+sb --version                         # 0.1.3
 ```
 
 Requer Node ≥ 20 (funciona sob bun também) e o `claude` no `PATH`. Foi feito para macOS: o
@@ -83,7 +83,9 @@ Se o `~/.zshrc` ainda tem a linha `# claude-conta`, o `sb install` não mexe nel
   (o que vale para pastas fora de todo `root`). O `root` é absoluto ou começa com `~`. Sem
   `--accounts` o mux só pode usar a preferida; sem `--pool` ele **nunca troca sozinho**.
 - O mux de uma pasta é o `root` mais profundo que a contém; fora de todos, o `default`.
-  `sb agents` sem nome deduz o mux pela pasta atual.
+  `sb agents` sem nome deduz o mux pela pasta atual. Para uma aba por projeto dentro do mesmo mux,
+  `sb agents <mux> --cwd <pasta>` abre a view nessa pasta (sem o nome, o mux é o dono da pasta); uma
+  pasta que pertence a outro mux é recusada.
 - Conta que já existe entra em outro mux com `sb attach <conta> <mux> [--pool | --at N] [--preferred]`
   e sai com `sb detach <conta> <mux>` (recusa a preferida e a conta atual do mux). `sb attach` de uma
   conta que ainda não existe faz o login antes. `sb accounts` lista todas as contas, anexadas ou não;
@@ -280,7 +282,7 @@ Roda nesta ordem:
 
 ```bash
 # 1. instalar o sb (uma vez)
-npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.2/switchboard-0.1.2.tgz
+npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.3/switchboard-0.1.3.tgz
 
 # 2. ver o plano; não grava nada nem para nenhum processo
 sb migrate --simular
@@ -332,7 +334,7 @@ agents` com o settings antigo; ou `ps` indisponível. Nada é apagado: o `--fini
 | `sb attach <conta> <mux> [--pool \| --at N] [--preferred] [--json]` · `sb detach <conta> <mux> [--json]` | liga/desliga uma conta de um mux |
 | `sb mux [list] [--json]` · `sb mux add <nome> --root <pasta> --account <conta> [--accounts a,b] [--pool a,b]` | muxes |
 | `sb mux set <nome> [--root] [--account] [--accounts] [--pool] [--default]` · `sb mux rm <nome>` | só a config; a conta atual não troca (e `--accounts` não pode tirá-la: `sb swap` antes, exit 3) |
-| `sb agents [mux]` · `sb run [mux] -- <args do claude>` | abre o `claude agents` / o `claude` com o settings do mux |
+| `sb agents [mux] [--cwd <pasta>]` · `sb run [mux] -- <args do claude>` | abre o `claude agents` / o `claude` com o settings do mux |
 | `sb which [pasta] [--json]` | caminho do settings do mux da pasta (é o que o wrapper usa) |
 | `sb swap <mux> [conta] [--clear] [--json]` | troca manual (vale até o reset da preferida) |
 | `sb pin <sessão> <conta> [--json]` · `sb unpin <sessão> [--json]` | fixa / solta uma sessão |

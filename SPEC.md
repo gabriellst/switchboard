@@ -307,7 +307,7 @@ Todos que produzem dados aceitam `--json`, que nunca traz token (e passa por uma
 | `sb attach <conta> <mux> [--pool \| --at N] [--preferred] [--json]` | anexa (idempotente; `--at` move); conta sem token faz o login antes (recusa `--json`) |
 | `sb detach <conta> <mux> [--json]` | desanexa de `accounts` e `pool`; recusa a preferida e a atual |
 | `sb mux [list] [--json]` · `sb mux add` · `sb mux set` · `sb mux rm` | `add --root --account [--accounts] [--pool]`; `set [--root] [--account] [--accounts] [--pool] [--default]` só edita a config (`--accounts` que tira a conta atual do mux é recusado, exit 3: `sb swap` antes, como no `detach`); `rm` mantém o link e recusa o default |
-| `sb agents [mux]` · `sb run [mux] -- <args>` | abrem o `claude` (seção 8) |
+| `sb agents [mux] [--cwd <pasta>]` · `sb run [mux] -- <args>` | abrem o `claude` (seção 8); `--cwd` troca a pasta da view (padrão: a raiz do mux), e sem nome o mux é o dono dessa pasta; pasta de outro mux, inexistente ou que não é pasta → exit 3 |
 | `sb which [pasta] [--json]` | `{ mux, settings, account }` ou só o caminho |
 | `sb swap <mux> [conta] [--clear] [--json]` | seção 5.4; exit 1 se alguma parada falhou |
 | `sb pin <sessão> <conta> [--json]` · `sb unpin <sessão> [--json]` | seção 5.6 |
