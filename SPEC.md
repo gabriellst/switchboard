@@ -156,6 +156,13 @@ trabalho agendado → `scheduled`; presa por limite (`blocked` com `needs` come�
 - `hasScheduledWork` = `pid` e `inFlight` e (`kinds` ∋ `session_cron` ou ∋ `monitor` ou `wake` ≠ null).
 - `isLimitBlocked` = viva, `job.state == "blocked"`, `needs` começa com `rate limited`, `tasks == 0`,
   `inFlight` presente e `status ≠ busy` (`queued` pode ser 1).
+- **Conta de origem esgotada de vez** (uma janela em ≥ 100 % ou `rejected`, reset no futuro, medição de até 15 min):
+  quem ficou nela não trabalha mais, então `busy` e `scheduled` também reiniciam (comandos de fundo, monitores e
+  agendamentos morrem). Nunca a sessão que chamou nem a de `state.json` ilegível. No limiar de troca (90 %/95 %) a
+  conta ainda responde e nada disso vale.
+- **`swap.autoResume`** (padrão `false`): a sessão parada por estar presa no limite, ou reiniciada à força, é retomada
+  com `claude --bg --resume <sessionId> <pedido de continuar>` (mesmo id, opções salvas, já na conta nova). A que
+  estava livre fica parada.
 - `free` e `limit-blocked` → `claude stop` (com a atividade reconferida com dados frescos logo antes;
   só vale se a entrada some de `agents` depois). `busy` → `waitingBusy`. `scheduled` → `keptScheduled`,
   nunca parada; se a conta de origem está esgotada, avisa **uma vez** por sessão.

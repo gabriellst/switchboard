@@ -29,6 +29,7 @@ export const SwapConfig = z.strictObject({
   threshold: Threshold.prefault({}),
   returnOnReset: z.boolean().default(true).meta({ description: 'Volta à conta preferida quando a janela dela reinicia' }),
   probeEvery: Duration.default('5m').meta({ description: 'Intervalo entre medições de uso: 30s, 5m, 1h' }),
+  autoResume: z.boolean().default(false).meta({ description: 'Depois de reiniciar uma sessão que estava presa no limite, o sb a retoma em segundo plano pedindo para continuar' }),
 })
 
 export const MuxConfig = z.strictObject({

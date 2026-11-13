@@ -26,11 +26,11 @@ rodando, e interromper o trabalho para trocar de conta seria pior que o limite.
 Ainda não está no npm: a instalação é pelo tarball do Release no GitHub.
 
 ```bash
-npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.6/switchboard-0.1.6.tgz
+npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.7/switchboard-0.1.7.tgz
 # ou
-bun add -g https://github.com/gabriellst/switchboard/releases/download/v0.1.6/switchboard-0.1.6.tgz
+bun add -g https://github.com/gabriellst/switchboard/releases/download/v0.1.7/switchboard-0.1.7.tgz
 
-sb --version                         # 0.1.6
+sb --version                         # 0.1.7
 ```
 
 Requer Node ≥ 20 (funciona sob bun também) e o `claude` no `PATH`. Foi feito para macOS: o
@@ -100,7 +100,7 @@ Se o `~/.zshrc` ainda tem a linha `# claude-conta`, o `sb install` não mexe nel
 
 `~/.config/switchboard/config.jsonc` (ou `$XDG_CONFIG_HOME`; sem segredo, pode ir para dotfiles).
 O `sb` edita preservando os comentários; chave desconhecida é erro (exit 2). O que não tem comando
-(`swap`) se edita à mão; o `$schema` aponta para o `schema.json` do pacote.
+(`swap`) se edita à mão — `threshold.fiveHour`/`sevenDay` (quando trocar), `autoResume` (retomar sozinho a sessão que estava presa no limite); o `$schema` aponta para o `schema.json` do pacote.
 
 ```jsonc
 {
@@ -282,7 +282,7 @@ Roda nesta ordem:
 
 ```bash
 # 1. instalar o sb (uma vez)
-npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.6/switchboard-0.1.6.tgz
+npm i -g https://github.com/gabriellst/switchboard/releases/download/v0.1.7/switchboard-0.1.7.tgz
 
 # 2. ver o plano; não grava nada nem para nenhum processo
 sb migrate --simular

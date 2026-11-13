@@ -33,7 +33,7 @@ const err = (error: 'dead-token' | 'rate-limited' | 'network' | 'unexpected' | '
 const limited = (streak?: number): Measurement => ({ ok: false, error: 'rate-limited', httpStatus: 429, measuredAt: NOW, ...(streak !== undefined && { streak }) }) as Measurement
 
 const bk: MuxConfig = { root: '/r', account: 'gabriel', accounts: ['gabriel', 'admin1', 'cliente-x'], pool: ['gabriel', 'admin1'] }
-const swapOf = (returnOnReset = true): SwapConfig => ({ auto: true, threshold: TH, returnOnReset, probeEvery: '5m' })
+const swapOf = (returnOnReset = true): SwapConfig => ({ auto: true, threshold: TH, returnOnReset, probeEvery: '5m', autoResume: false })
 
 interface Extra {
   current?: string

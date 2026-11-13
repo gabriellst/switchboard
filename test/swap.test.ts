@@ -10,7 +10,7 @@ import { withLock } from '../src/core/fsx.js'
 import { currentAccount, pointMux } from '../src/core/links.js'
 import { logFile, muxLink, pinLink, runtimeFile, tokenFile, usageFile } from '../src/core/paths.js'
 import { readRuntime, writeRuntime } from '../src/core/runtime.js'
-import { applySwap, manualSwap, restartStale } from '../src/core/swap.js'
+import { applySwap, manualSwap, restartStale, type SwapOutcome } from '../src/core/swap.js'
 import { ensureState } from '../src/core/tokens.js'
 import { FAKE_TOKEN, populatedSandbox, type Sandbox } from './helpers.js'
 
@@ -768,3 +768,101 @@ describe('sb swap (comando)', () => {
 function rmTokenOf(sb: Sandbox, account: string): void {
   rmSync(tokenFile(sb.paths, account))
 }
+
+describe('conta de origem esgotada DE VEZ (>= 100 %): reinicia até quem tem tarefa de fundo ou agendamento', () => {
+  const doSwap = (...a: Parameters<typeof applySwap>): SwapOutcome => applySwap(...a) as SwapOutcome
+  const resumes = (sb: Sandbox): Array<{ argv: string[]; cwd: string; hasOauthEnv: boolean }> => sb.calls().filter((c) => c.argv[0] === '--bg' && c.argv[1] === '--resume')
+  const uuid = (id: string): string => `${id}-0000-4000-8000-000000000000`
+  /** medição da conta de origem com a janela de 5 h em `u` (>= 1 = acabou) */
+  const origin = (sb: Sandbox, u: number): void => setUsage(sb, { gabriel: u, admin1: 0.2 })
+  const withResume = (sb: Sandbox, on: boolean): void => {
+    const c = JSON.parse(readFileSync(sb.paths.configFile, 'utf8')) as Record<string, unknown>
+    c.swap = { autoResume: on }
+    writeFileSync(sb.paths.configFile, JSON.stringify(c))
+  }
+
+  test('origem em 102 %: busy (tarefa de fundo), scheduled e sem inFlight também param; quem chamou e a ilegível não', async () => {
+    const sb = world()
+    addAll(sb)
+    const noFlight = 'abcdef0d'
+    sb.addJob({ agent: { id: noFlight, startedAt: OLD, pid: 4242, status: 'idle' }, state: { respawnFlags: flags(muxLink(sb.paths, 'bk')), state: 'done' } })
+    const callerId = 'abcdef0e'
+    addSession(sb, callerId, flags(muxLink(sb.paths, 'bk')), 'busy')
+    origin(sb, 1.02)
+    const cfg = await loadConfig(sb.paths)
+    const o = doSwap(ctxAt(sb, { env: { ...sb.env, CLAUDE_JOB_DIR: join(sb.paths.jobsDir, callerId) } }), cfg, { mux: 'bk', to: 'admin1', reason: 'teste' })
+    expect([...o.stopped].sort()).toEqual([IDS.a, IDS.b, IDS.c, IDS.d, noFlight].sort())
+    expect(o.keptScheduled).toEqual([])
+    expect(o.waitingBusy).toEqual([callerId]) // quem chamou nunca; a `h` (state.json ilegível) nem é do mux para nós
+    for (const id of [callerId, IDS.h, IDS.e, IDS.f, IDS.g]) expect(live(sb, id)).toBe(true)
+  })
+
+  test('origem só acima do limiar (95 %, ainda funciona): busy e scheduled ficam, como antes', async () => {
+    const sb = world()
+    addAll(sb)
+    origin(sb, 0.95)
+    const o = doSwap(ctxAt(sb), await loadConfig(sb.paths), { mux: 'bk', to: 'admin1', reason: 'teste' })
+    expect(o.stopped).toEqual([IDS.a, IDS.b])
+    expect(o.waitingBusy).toEqual([IDS.c])
+    expect(o.keptScheduled).toEqual([IDS.d])
+  })
+
+  test('medição da origem velha (> 15 min) não autoriza o reinício forçado', async () => {
+    const sb = world()
+    addAll(sb)
+    origin(sb, 1.02)
+    const o = doSwap(ctxAt(sb, { now: () => NOW + 16 * 60_000 }), await loadConfig(sb.paths), { mux: 'bk', to: 'admin1', reason: 'teste' })
+    expect(o.waitingBusy).toContain(IDS.c)
+    expect(o.keptScheduled).toEqual([IDS.d])
+  })
+
+  test('autoResume ligado: retoma (mesmo id, pasta da sessão, sem token) as que estavam presas ou foram forçadas; a livre fica parada', async () => {
+    const sb = world()
+    addAll(sb)
+    origin(sb, 1.02)
+    withResume(sb, true)
+    const o = doSwap(ctxAt(sb), await loadConfig(sb.paths), { mux: 'bk', to: 'admin1', reason: 'teste' })
+    const r = resumes(sb)
+    expect(r.map((c) => c.argv[2]).sort()).toEqual([uuid(IDS.b), uuid(IDS.c), uuid(IDS.d)].sort())
+    expect(r.map((c) => c.argv[2])).not.toContain(uuid(IDS.a)) // livre: ninguém pediu para continuar
+    for (const c of r) {
+      expect(c.argv).toHaveLength(4)
+      expect(c.argv[3]).toContain('Continue')
+      expect(c.hasOauthEnv).toBe(false)
+    }
+    expect([...(o.resumed ?? [])].sort()).toEqual([IDS.b, IDS.c, IDS.d].sort())
+  })
+
+  test('autoResume desligado (padrão): ninguém é retomado e o resultado não ganha `resumed`', async () => {
+    const sb = world()
+    addAll(sb)
+    origin(sb, 1.02)
+    const o = doSwap(ctxAt(sb), await loadConfig(sb.paths), { mux: 'bk', to: 'admin1', reason: 'teste' })
+    expect(resumes(sb)).toEqual([])
+    expect('resumed' in o).toBe(false)
+  })
+
+  test('autoResume: limit-blocked é retomada mesmo com a origem só no limiar', async () => {
+    const sb = world()
+    addAll(sb)
+    origin(sb, 0.95)
+    withResume(sb, true)
+    const o = doSwap(ctxAt(sb), await loadConfig(sb.paths), { mux: 'bk', to: 'admin1', reason: 'teste' })
+    expect(resumes(sb).map((c) => c.argv[2])).toEqual([uuid(IDS.b)])
+    expect(o.resumed).toEqual([IDS.b])
+  })
+
+  test('a retomada falhando não desfaz a parada nem lança: fica registrada no log, sem token', async () => {
+    const sb = world()
+    addAll(sb)
+    origin(sb, 0.95)
+    withResume(sb, true)
+    const ctx = hooked(sb, (args) => (args[0] === '--bg' ? { status: 1, stderr: `falhou ${FAKE_TOKEN}` } : undefined))
+    const o = doSwap(ctx, await loadConfig(sb.paths), { mux: 'bk', to: 'admin1', reason: 'teste' })
+    expect(o.stopped).toEqual([IDS.a, IDS.b])
+    expect('resumed' in o).toBe(false)
+    const log = readFileSync(logFile(sb.paths, 'watch'), 'utf8')
+    expect(log).toContain(`não consegui retomar a sessão ${IDS.b}`)
+    expect(log).not.toMatch(/sk-ant-/)
+  })
+})

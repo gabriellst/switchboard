@@ -64,6 +64,11 @@
           "description": "Intervalo entre medições de uso: 30s, 5m, 1h",
           "type": "string",
           "pattern": "^[1-9]\\d*[smh]$"
+        },
+        "autoResume": {
+          "default": false,
+          "description": "Depois de reiniciar uma sessão que estava presa no limite, o sb a retoma em segundo plano pedindo para continuar",
+          "type": "boolean"
         }
       },
       "additionalProperties": false

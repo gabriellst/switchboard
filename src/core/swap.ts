@@ -1,13 +1,13 @@
 import type { Config, MuxConfig } from './config.js'
 import type { Ctx } from './ctx.js'
-import { listAgents, stopSession, type StopOptions } from './claude.js'
+import { listAgents, resumeSession, stopSession, type StopOptions } from './claude.js'
 import { EXIT, SbError } from './errors.js'
 import { requireMux } from './accounts.js'
 import { currentAccount, pointMux } from './links.js'
 import { assertSafeName } from './paths.js'
 import { availability, desiredAccount } from './rules.js'
 import { readRuntime, writeRuntime, type Runtime } from './runtime.js'
-import { activityOf, callerJobId, loadSessionsWithWarnings, startedAt, type Session } from './sessions.js'
+import { activityOf, callerJobId, loadSessionsWithWarnings, startedAt, type Activity, type Session } from './sessions.js'
 import { KEYCHAIN } from './schema.js'
 import { ensureState, hasToken } from './tokens.js'
 import { readUsage, type Measurement } from './usage.js'
@@ -37,6 +37,8 @@ export interface SwapOutcome {
   failed: Array<{ id: string; error: string }>
   /** só com `RestartOptions.throttle` (o `watch`) e só quando não vazia: adiadas para o próximo ciclo (teto de paradas ou recuo por falha anterior) */
   deferred?: string[]
+  /** só com `swap.autoResume` e só quando não vazia: paradas por nós e já retomadas em segundo plano com o pedido de continuar */
+  resumed?: string[]
 }
 
 export type Noop = { noop: true }
@@ -55,6 +57,26 @@ export interface RestartOptions {
 }
 
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1000
+/** Medição mais velha que isto não autoriza o reinício forçado (parar um turno exige saber AGORA que a conta acabou). */
+const HARD_EXHAUSTED_MAX_AGE_MS = 15 * 60 * 1000
+
+/** O que a sessão retomada recebe: seguir o trabalho, sabendo que o que rodava em segundo plano morreu. */
+export const RESUME_PROMPT =
+  'Continue de onde parou. Esta sessão foi reiniciada pelo switchboard para trocar de conta, porque a anterior bateu o limite de uso. ' +
+  'Comandos de fundo, monitores e agendamentos que estavam ativos foram encerrados no reinício: confira o que ainda é necessário e refaça.'
+
+/**
+ * A conta acabou DE VEZ: uma janela em >= 100 % (ou `rejected`) com o reset ainda no futuro. Não é o limiar de troca
+ * (90 %/95 %, em que a conta ainda responde): aqui nenhum pedido passa até o reset, então quem está nela não trabalha.
+ * Janela ausente (`resetsAt` 0) nunca conta; medição com erro ou velha também não.
+ */
+export function hardExhausted(m: Measurement | undefined, nowMs: number): boolean {
+  if (m === undefined || !m.ok) return false
+  if (nowMs - m.measuredAt > HARD_EXHAUSTED_MAX_AGE_MS) return false
+  const nowS = nowMs / 1000
+  const dead = (w: { utilization: number; resetsAt: number; status: string }): boolean => (w.utilization >= 1 || w.status === 'rejected') && w.resetsAt > nowS
+  return dead(m.fiveHour) || dead(m.sevenDay) || (m.status === 'rejected' && m.resetsAt > nowS)
+}
 const TOKEN_RE = /sk-ant-[A-Za-z0-9_-]+/g
 const redact = (s: string): string => s.replace(TOKEN_RE, '<token>')
 
@@ -150,6 +172,7 @@ export function applySwap(ctx: Ctx, cfg: Config, p: { mux: string; to: string; r
   if (outcome.waitingBusy.length > 0) parts.push(`${outcome.waitingBusy.length} aguardando o fim do turno`)
   if (outcome.keptScheduled.length > 0) parts.push(`${outcome.keptScheduled.length} com trabalho agendado mantida(s)`)
   if (outcome.failed.length > 0) parts.push(`${outcome.failed.length} falha(s) ao parar`)
+  if ((outcome.resumed?.length ?? 0) > 0) parts.push(`${outcome.resumed!.length} retomada(s) na conta nova`)
   note(
     ctx,
     `troca no mux ${p.mux}: ${from} → ${p.to} (${p.reason}); paradas: [${outcome.stopped.join(', ')}]; aguardando: [${outcome.waitingBusy.join(', ')}]; agendadas: [${outcome.keptScheduled.join(', ')}]; falhas: [${outcome.failed.map((f) => `${f.id}: ${f.error}`).join('; ')}]`,
@@ -202,14 +225,28 @@ export function restartStale(ctx: Ctx, cfg: Config, mux: string, opts: RestartOp
     note(ctx, `sessão ${id} (mux ${mux}) tem trabalho agendado e ficou na conta esgotada ${from}`)
   }
 
+  // A conta de onde o mux saiu acabou de vez: quem ficou nela não trabalha mais (nem turno, nem cron, nem monitor: tudo
+  // precisa do modelo). Aí `busy` e `scheduled` também reiniciam, menos a sessão que chamou e a de estado ilegível.
+  const origin = state.lastSwap?.from
+  const forced = origin !== undefined && hardExhausted(usage.latest[origin], ctx.now())
+  const forceable = (s: Session): boolean => forced && s.job !== null && s.agent.id !== caller
+  /** por que cada candidata vai parar: decide se ela é retomada depois (`free` não: ninguém pediu para continuar) */
+  type Why = 'free' | 'limit' | 'forced'
+  const why = (s: Session, act: Activity): Why | undefined => {
+    if (act === 'free') return 'free'
+    if (act === 'limit-blocked') return 'limit'
+    if ((act === 'busy' || act === 'scheduled') && forceable(s)) return 'forced'
+    return undefined
+  }
+
   const candidates: string[] = []
   try {
     for (const s of loadSessionsDeduped(ctx, runtime)) {
       if (!isStale(s)) continue
       const act = activityOf(s, caller)
-      if (act === 'busy') out.waitingBusy.push(s.agent.id)
+      if (why(s, act) !== undefined) candidates.push(s.agent.id)
+      else if (act === 'busy') out.waitingBusy.push(s.agent.id)
       else if (act === 'scheduled') keepScheduled(s.agent.id)
-      else if (act === 'free' || act === 'limit-blocked') candidates.push(s.agent.id)
     }
   } catch (e) {
     save() // avisos já emitidos não se repetem
@@ -240,15 +277,12 @@ export function restartStale(ctx: Ctx, cfg: Config, mux: string, opts: RestartOp
         const fresh = loadSessionsDeduped(ctx, runtime).find((s) => s.agent.id === id)
         if (fresh === undefined || !isStale(fresh)) continue // já parou sozinha ou foi reaberta (startedAt novo): não é nossa
         const act = activityOf(fresh, caller)
-        if (act === 'busy') {
-          out.waitingBusy.push(id)
+        const reason = why(fresh, act)
+        if (reason === undefined) {
+          if (act === 'busy') out.waitingBusy.push(id)
+          else if (act === 'scheduled') keepScheduled(id)
           continue
         }
-        if (act === 'scheduled') {
-          keepScheduled(id)
-          continue
-        }
-        if (act !== 'free' && act !== 'limit-blocked') continue
         if (fresh.agent.pid == null) continue // sem pid: nada a parar (e `claude stop` falharia)
         if (throttle !== undefined) {
           if (throttle.stops <= 0) {
@@ -269,6 +303,12 @@ export function restartStale(ctx: Ctx, cfg: Config, mux: string, opts: RestartOp
           continue
         }
         out.stopped.push(id)
+        if (reason === 'forced') note(ctx, `sessão ${id} (mux ${mux}) reiniciada mesmo com trabalho em andamento: a conta ${origin} acabou de vez; comandos de fundo e agendamentos dela foram encerrados`)
+        // retomada: só quem estava presa no limite ou foi forçada (a livre fica parada, à espera de quem a abrir)
+        if (cfg.swap.autoResume && reason !== 'free') {
+          if (resumeSession(ctx, fresh.agent.sessionId, fresh.agent.cwd, RESUME_PROMPT)) (out.resumed ??= []).push(id)
+          else note(ctx, `não consegui retomar a sessão ${id} (mux ${mux}); ela ficou parada: abra e peça para continuar`)
+        }
       } catch (e) {
         if (!(e instanceof SbError)) throw e
         out.failed.push({ id, error: redact(e.message) })

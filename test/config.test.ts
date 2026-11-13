@@ -62,13 +62,13 @@ function detailOf(text: string, home?: string): string {
 
 test('exemplo do §5 carrega com defaults', () => {
   const c = parseConfig(DESIGN_EXAMPLE, 'x')
-  expect(c.swap).toEqual({ auto: true, threshold: { fiveHour: 0.9, sevenDay: 0.95 }, returnOnReset: true, probeEvery: '5m' })
+  expect(c.swap).toEqual({ auto: true, threshold: { fiveHour: 0.9, sevenDay: 0.95 }, returnOnReset: true, probeEvery: '5m', autoResume: false })
   expect(c.mux.pessoal!.pool).toEqual(['admin1', 'gabriel'])
 })
 
 test('só o mínimo: defaults de swap e pool', () => {
   const c = parseConfig('{"switchboard":1,"accounts":{"a":{}},"default":"m","mux":{"m":{"root":"/r","account":"a","accounts":["a"]}}}', 'x')
-  expect(c.swap).toEqual({ auto: true, threshold: { fiveHour: 0.9, sevenDay: 0.95 }, returnOnReset: true, probeEvery: '5m' })
+  expect(c.swap).toEqual({ auto: true, threshold: { fiveHour: 0.9, sevenDay: 0.95 }, returnOnReset: true, probeEvery: '5m', autoResume: false })
   expect(c.mux.m!.pool).toEqual([])
 })
 

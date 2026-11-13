@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs'
 import { z } from 'zod'
 import type { Ctx } from './ctx.js'
 import { EXIT, SbError } from './errors.js'
@@ -134,3 +135,24 @@ export function stopSession(ctx: Ctx, id: string, timeoutMs = 45_000, opts: Stop
     sleep(pollMs)
   }
 }
+
+const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/**
+ * Retoma em segundo plano uma sessão PARADA, com uma instrução: `claude --bg --resume <sessionId> <prompt>` (medido em
+ * 13/11/2026 no 2.1.3xx: "woke session <id> with its saved options", mesmo id, as opções salvas — inclusive o
+ * `--settings` do mux — e a instrução é executada). Roda na pasta da sessão (ou no HOME, se ela sumiu), com o ambiente
+ * limpo: nunca o `CLAUDE_CODE_OAUTH_TOKEN` herdado. `false` se o id não é um UUID ou se o `claude` falhou; não lança.
+ */
+export function resumeSession(ctx: Ctx, sessionId: string, cwd: string, prompt: string): boolean {
+  if (!SESSION_UUID.test(sessionId)) return false
+  let dir = ctx.paths.home
+  try {
+    if (statSync(cwd).isDirectory()) dir = cwd
+  } catch {
+    // pasta da sessão sumiu: o HOME serve (o claude acha a sessão pelo id)
+  }
+  const r = ctx.run(claudeBin(ctx.env), ['--bg', '--resume', sessionId, prompt], { cwd: dir, env: cleanEnv(ctx.env), timeoutMs: 60_000 })
+  return r.status === 0
+}
+
