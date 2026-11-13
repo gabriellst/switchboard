@@ -1,4 +1,5 @@
-import { statSync } from 'node:fs'
+import { accessSync, closeSync, constants, openSync, readSync, statSync } from 'node:fs'
+import { delimiter, join } from 'node:path'
 import { z } from 'zod'
 import type { Ctx } from './ctx.js'
 import { EXIT, SbError } from './errors.js'
@@ -30,6 +31,46 @@ export function cleanEnv(env: Record<string, string | undefined>): Record<string
 /** `SWITCHBOARD_CLAUDE` (binário de teste) ou o `claude` do PATH. */
 export function claudeBin(env: Record<string, string | undefined>): string {
   return env.SWITCHBOARD_CLAUDE || 'claude'
+}
+
+/** O arquivo começa com `#!`? (script: pode ser um invólucro, como o `claude` que o cmux põe na frente do PATH) */
+function isScript(file: string): boolean {
+  try {
+    const fd = openSync(file, 'r')
+    try {
+      const b = Buffer.alloc(2)
+      return readSync(fd, b, 0, 2, 0) === 2 && b[0] === 0x23 && b[1] === 0x21
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return false
+  }
+}
+
+/**
+ * O `claude` com que o `sb` GERENCIA sessões (`agents`, `stop`, `--bg --resume`): o binário de verdade, por caminho
+ * absoluto. Um invólucro no PATH pode acrescentar argumentos (o do cmux injeta `--settings <hooks>` em todo comando);
+ * num `--bg --resume` isso faz o claude criar uma CÓPIA da sessão sem o `--settings` do mux, que roda no keychain.
+ * Ordem: `SWITCHBOARD_CLAUDE`; o 1º `claude` executável do PATH que não é script; o 1º executável; `claude`.
+ * (Abrir sessão para o usuário, `sb agents`/`sb run`, continua pelo `claude` do PATH: lá o invólucro é desejado.)
+ */
+export function realClaudeBin(env: Record<string, string | undefined>): string {
+  if (env.SWITCHBOARD_CLAUDE) return env.SWITCHBOARD_CLAUDE
+  let firstScript: string | undefined
+  for (const dir of (env.PATH ?? '').split(delimiter)) {
+    if (!dir) continue
+    const f = join(dir, 'claude')
+    try {
+      if (!statSync(f).isFile()) continue
+      accessSync(f, constants.X_OK)
+    } catch {
+      continue
+    }
+    if (!isScript(f)) return f
+    firstScript ??= f
+  }
+  return firstScript ?? 'claude'
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -78,7 +119,7 @@ function describeIssue(issue: z.core.$ZodIssue): string {
 
 /** `claude agents --json --all` (cwd = HOME, ambiente limpo). Formato inesperado → `SbError` exit 4. */
 export function listAgents(ctx: Ctx): AgentEntry[] {
-  const r = ctx.run(claudeBin(ctx.env), ['agents', '--json', '--all'], { cwd: ctx.paths.home, env: cleanEnv(ctx.env), timeoutMs: 30_000 })
+  const r = ctx.run(realClaudeBin(ctx.env), ['agents', '--json', '--all'], { cwd: ctx.paths.home, env: cleanEnv(ctx.env), timeoutMs: 30_000 })
   if (r.status !== 0) {
     const why = excerpt(r.stderr)
     throw new SbError(`\`claude agents --json --all\` falhou (código ${r.status ?? 'nenhum'}${why ? `: ${why}` : ''}); confira o \`claude\` ou rode \`sb doctor\``, EXIT.CLAUDE)
@@ -123,7 +164,7 @@ export function stopSession(ctx: Ctx, id: string, timeoutMs = 45_000, opts: Stop
   const pollMs = Math.max(1, opts.pollMs ?? 250)
   const sleep = opts.sleep ?? blockingSleep
   const started = ctx.now()
-  const r = ctx.run(claudeBin(ctx.env), ['stop', id], { cwd: ctx.paths.home, env: cleanEnv(ctx.env), timeoutMs })
+  const r = ctx.run(realClaudeBin(ctx.env), ['stop', id], { cwd: ctx.paths.home, env: cleanEnv(ctx.env), timeoutMs })
   if (r.status !== 0) return false
   const deadline = started + timeoutMs
   // o limite de consultas protege de um relógio parado: o prazo vale, mas nunca gira para sempre
@@ -152,7 +193,7 @@ export function resumeSession(ctx: Ctx, sessionId: string, cwd: string, prompt: 
   } catch {
     // pasta da sessão sumiu: o HOME serve (o claude acha a sessão pelo id)
   }
-  const r = ctx.run(claudeBin(ctx.env), ['--bg', '--resume', sessionId, prompt], { cwd: dir, env: cleanEnv(ctx.env), timeoutMs: 60_000 })
+  const r = ctx.run(realClaudeBin(ctx.env), ['--bg', '--resume', sessionId, prompt], { cwd: dir, env: cleanEnv(ctx.env), timeoutMs: 60_000 })
   return r.status === 0
 }
 

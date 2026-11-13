@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { listAgents, stopSession, type AgentEntry } from '../src/core/claude.js'
+import { listAgents, realClaudeBin, stopSession, type AgentEntry } from '../src/core/claude.js'
 import { EXIT, SbError } from '../src/core/errors.js'
 import { ownershipOf, type Ownership, readJobState, replaceSettings, settingsValues, writeJobFlags } from '../src/core/jobs.js'
 import { muxLink, pinLink, resolvePaths, type Paths } from '../src/core/paths.js'
@@ -588,5 +588,22 @@ describe('writeJobFlags', () => {
     const before = readFileSync(file, 'utf8')
     expect(() => writeJobFlags(sb.paths, 'a1b2c3d4', (f) => [...f, '-x'], join(sb.dir, 'arquivo', 'nao', 'existe', '\0x'))).toThrow()
     expect(readFileSync(file, 'utf8')).toBe(before)
+  })
+})
+
+describe('realClaudeBin: o sb gerencia sessões com o binário DE VERDADE, nunca com um invólucro do PATH', () => {
+  // 13/11/2026: o cmux põe um script `claude` na frente do PATH que injeta `--settings <hooks>` em todo comando; o
+  // `claude --bg --resume` do sb passava por ele e o claude criava uma CÓPIA da sessão sem o settings do mux (keychain).
+  test('pula o script e devolve o caminho absoluto do binário; SWITCHBOARD_CLAUDE manda; sem binário, o 1º executável; sem nada, `claude`', () => {
+    const sb = sandbox()
+    const wrapper = join(sb.dir, 'cmux-bin')
+    const real = join(sb.dir, 'local-bin')
+    for (const d of [wrapper, real]) mkdirSync(d, { recursive: true })
+    writeFileSync(join(wrapper, 'claude'), '#!/usr/bin/env bash\nexec real-claude --settings hooks "$@"\n', { mode: 0o755 })
+    writeFileSync(join(real, 'claude'), Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0x07, 0x00]), { mode: 0o755 })
+    expect(realClaudeBin({ PATH: `${wrapper}:/nao/existe:${real}` })).toBe(join(real, 'claude'))
+    expect(realClaudeBin({ PATH: `${wrapper}:${real}`, SWITCHBOARD_CLAUDE: '/x/fake' })).toBe('/x/fake')
+    expect(realClaudeBin({ PATH: wrapper })).toBe(join(wrapper, 'claude')) // só há o script: é o que temos
+    expect(realClaudeBin({ PATH: '/nao/existe' })).toBe('claude')
   })
 })

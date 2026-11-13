@@ -268,6 +268,9 @@ Variáveis de ambiente: `HOME` (tudo parte dele, não de `os.homedir()`), `XDG_C
 
 ## 8. Integrações
 
+- **Gerenciar sessões** (`claude agents --json`, `claude stop`, `claude --bg --resume`): sempre com o binário de verdade do
+  `claude`, por caminho absoluto (o 1º do PATH que não é script). Um invólucro no PATH — o cmux instala um, que injeta
+  `--settings <hooks>` — faria o `--bg --resume` criar uma cópia da sessão fora do mux.
 - **Abrir o `claude`** (`sb agents`, `sb run`): checa o link (`checkSettingsTarget`), **checa de novo**
   logo antes do spawn, e roda o `claude` com stdio herdado e `cleanEnv` (F10). `agents` →
   `claude agents --cwd <root> --settings <link>`; `run` → `claude <args> --settings <link>` com o
