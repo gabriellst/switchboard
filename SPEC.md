@@ -79,6 +79,9 @@ São restrições, não suposições. O texto completo está no design (§3) e n
 - **Cache**: `sb usage` reaproveita medições de até 60 s (`sb accounts` nunca mede: só lê o `usage.json`); o `watch` sonda quando a
   medição mais nova passa de `swap.probeEvery`, ou há conta nunca medida. `no-token` não fica preso
   no cache. Medição com idade negativa (relógio voltou) não vale como cache.
+- **Medição atrasada custa caro** (a janela de 5 h pode encher em minutos): a sonda da conta em uso que falha (rede,
+  resposta estranha) é repetida depois de 30 s, sem esperar o `probeEvery`; e quando uma sessão de mux acaba de ficar
+  presa por limite o `watch` mede na hora, para a troca sair no mesmo ciclo.
 - **Duplicatas**: duas contas com a mesma impressão (`5h-reset`, `7d-reset`, `5h-utilization`,
   `7d-utilization`) em `latest` **e** em `previous` formam um grupo (`usage.groups`); só vale depois
   de duas medições seguidas, e um erro transitório dissolve o grupo até duas medições `ok`. O

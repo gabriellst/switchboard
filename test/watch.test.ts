@@ -949,3 +949,57 @@ describe('rodada de correções 1', () => {
     })
   })
 })
+
+describe('medição atrasada (13/11/2026: a conta foi a 103 % antes de o watch trocar)', () => {
+  test('sonda da conta ATUAL de um mux falhou (network) há mais de 30 s → mede de novo, sem esperar o probeEvery', async () => {
+    const sb = world()
+    const api = await apiWith(0.8, 0.2)
+    try {
+      // gabriel (atual do mux bk) com erro de rede há 40 s; admin1 medida há 40 s; probeEvery padrão = 5 min
+      setUsage(sb, { admin1: 0.2 }, NOW - 40_000)
+      const u = JSON.parse(readFileSync(usageFile(sb.paths), 'utf8')) as { latest: Record<string, unknown> }
+      u.latest.gabriel = { ok: false, error: 'network', measuredAt: NOW - 40_000 }
+      writeFileSync(usageFile(sb.paths), JSON.stringify(u))
+      const r = await tick(withApi(sb, api), cfgOf(sb), fast)
+      expect(r.measured).toBe(true)
+      expect(api.requests.length).toBeGreaterThan(0)
+      // e, medida a 80 % (limiar 90 %)... continua; com 95 % troca no MESMO ciclo
+    } finally {
+      api.stop()
+    }
+  })
+
+  test('erro de rede recente (< 30 s) não vira laço de sondas', async () => {
+    const sb = world()
+    const api = await apiWith(0.8, 0.2)
+    try {
+      setUsage(sb, { admin1: 0.2 }, NOW - 10_000)
+      const u = JSON.parse(readFileSync(usageFile(sb.paths), 'utf8')) as { latest: Record<string, unknown> }
+      u.latest.gabriel = { ok: false, error: 'network', measuredAt: NOW - 10_000 }
+      writeFileSync(usageFile(sb.paths), JSON.stringify(u))
+      const r = await tick(withApi(sb, api), cfgOf(sb), fast)
+      expect(r.measured).toBe(false)
+      expect(api.requests).toHaveLength(0)
+    } finally {
+      api.stop()
+    }
+  })
+
+  test('uma sessão do mux acaba de ficar presa por limite → mede na hora (medição de 2 min atrás dizia 30 %) e troca no mesmo ciclo', async () => {
+    const sb = world()
+    const api = await apiWith(1.02, 0.2) // a verdade agora: gabriel acabou
+    try {
+      setUsage(sb, { gabriel: 0.3, admin1: 0.2 }, NOW - 2 * MIN) // dentro do probeEvery: sem o gatilho ninguém mediria
+      addSession(sb, A1, 'limit-blocked')
+      const r = await tick(withApi(sb, api), cfgOf(sb), fast)
+      expect(r.measured).toBe(true)
+      expect(r.swaps.map((x) => `${x.from}→${x.to}`)).toEqual(['gabriel→admin1'])
+      // no ciclo seguinte a mesma sessão presa não dispara outra medição
+      const again = api.requests.length
+      await tick(withApi(sb, api, NOW + 30_000), cfgOf(sb), fast)
+      expect(api.requests.length).toBe(again)
+    } finally {
+      api.stop()
+    }
+  })
+})

@@ -260,8 +260,10 @@ function snapshotOf(ctx: Ctx, s: Session): Record<string, unknown> {
  * viva fica `limit-blocked` → um snapshot no `watch.log`; sessões vivas de mux sem `inFlight` → lista "mantidas" (uma linha
  * no log por sessão); poda de `runtime.notified`. `claude agents` fora do ar não derruba o ciclo: pula o que depende da lista.
  */
-function scanSessions(ctx: Ctx, runtime: Runtime, report: TickReport, steps: Steps): void {
+/** Devolve `true` quando alguma sessão viva DE MUX ficou presa por limite neste ciclo (é nova: ainda não tinha snapshot). */
+function scanSessions(ctx: Ctx, runtime: Runtime, report: TickReport, steps: Steps): boolean {
   const now = ctx.now()
+  let newlyBlocked = false
   let sessions: Session[] | null = null
   steps.ran.add('agents')
   try {
@@ -277,6 +279,7 @@ function scanSessions(ctx: Ctx, runtime: Runtime, report: TickReport, steps: Ste
       if (!(s.live && isLimitBlocked(s))) delete runtime.notified[limit] // um novo bloqueio, depois, volta a ter snapshot
       else if (runtime.notified[limit] === undefined) {
         runtime.notified[limit] = now
+        if (s.owner.kind === 'mux') newlyBlocked = true
         note(ctx, `sessão ${id} ficou presa por limite: ${JSON.stringify(snapshotOf(ctx, s))}`)
       }
       if (s.live && s.owner.kind === 'mux' && s.job !== null && s.job.inFlight == null) {
@@ -290,6 +293,7 @@ function scanSessions(ctx: Ctx, runtime: Runtime, report: TickReport, steps: Ste
     }
   }
   prune(runtime, now, sessions === null ? null : new Set(sessions.map((s) => s.agent.id)))
+  return newlyBlocked
 }
 
 // ------------------------------------------------------------------------------------------------------------- troca
@@ -403,6 +407,22 @@ function handleMux(c: MuxCtx, mux: string): void {
 
 // ---------------------------------------------------------------------------------------------------------- o ciclo
 
+/** Uma sonda que falhou na conta em uso é repetida depois disto, sem esperar o `probeEvery` (medição perdida = troca atrasada). */
+const PROBE_RETRY_MS = 30_000
+
+/** Contas em uso agora (a atual de cada mux) cuja última sonda falhou (rede, resposta estranha) há mais de `PROBE_RETRY_MS`. */
+function failedCurrentProbe(ctx: Ctx, cfg: Config, usage: UsageFile, nowMs: number): boolean {
+  for (const mux of Object.keys(cfg.mux)) {
+    const account = currentAccount(ctx.paths, mux)
+    if (account === null || account === KEYCHAIN) continue
+    const m = usage.latest[account]
+    if (m === undefined || m.ok || m.error === 'no-token') continue
+    const age = nowMs - m.measuredAt
+    if (!(age >= 0 && age < PROBE_RETRY_MS)) return true
+  }
+  return false
+}
+
 function needsMeasure(cfg: Config, usage: UsageFile, nowMs: number, everyMs: number): boolean {
   const registry = Object.keys(cfg.accounts)
   if (registry.length === 0) return false
@@ -421,6 +441,10 @@ async function runTick(ctx: Ctx, cfg: Config, opts: TickOptions, report: TickRep
   if (needsMeasure(cfg, usage, now, everyMs)) {
     usage = await measureAll(ctx, cfg, { maxAgeMs: everyMs })
     report.measured = true
+  } else if (failedCurrentProbe(ctx, cfg, usage, now)) {
+    // a sonda da conta em uso falhou: repete já (as contas medidas há menos de PROBE_RETRY_MS ficam no cache)
+    usage = await measureAll(ctx, cfg, { maxAgeMs: Math.min(everyMs, PROBE_RETRY_MS) })
+    report.measured = true
   }
 
   const restartOpts: RestartOptions = { ...opts.restart, throttle: { stops: opts.maxStops ?? STOPS_PER_TICK } }
@@ -429,7 +453,16 @@ async function runTick(ctx: Ctx, cfg: Config, opts: TickOptions, report: TickRep
     for (const [mux, o] of Object.entries(r.overrides)) if (!(o.until > now)) delete r.overrides[mux]
   })
   const steps: Steps = { ran: new Set(), failed: new Set() }
-  mutateRuntime(ctx, (r) => scanSessions(ctx, r, report, steps))
+  let newlyBlocked = false
+  mutateRuntime(ctx, (r) => {
+    newlyBlocked = scanSessions(ctx, r, report, steps)
+  })
+  // Uma sessão de mux ACABOU de ficar presa por limite: a conta dela pode ter acabado entre duas sondas (a janela de
+  // 5 h enche rápido). Mede na hora, em vez de esperar o `probeEvery`, para a troca sair neste mesmo ciclo.
+  if (newlyBlocked && !report.measured) {
+    usage = await measureAll(ctx, cfg, { maxAgeMs: PROBE_RETRY_MS })
+    report.measured = true
+  }
 
   const c: MuxCtx = { ctx, cfg, usage, report, restartOpts, swapped: new Set(), steps }
   for (const mux of Object.keys(cfg.mux)) {

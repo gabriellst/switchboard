@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { expect, test } from 'bun:test'
 import type { Ctx } from '../src/core/ctx.js'
 import { SbError } from '../src/core/errors.js'
-import { findClaudeDir, findClaudeDirs, LAUNCH_LABEL, stableRuntime, planInstall, plistFile, runInstall, slashCommandFile, wrapperFile } from '../src/core/install.js'
+import { findClaudeDir, findClaudeDirs, LAUNCH_LABEL, pathFromPlist, stableRuntime, planInstall, plistFile, runInstall, slashCommandFile, wrapperFile } from '../src/core/install.js'
 import { muxLink, resolvePaths } from '../src/core/paths.js'
 import { renderInstall } from '../src/report.js'
 import { FAKE_TOKEN, filesUnder, populatedSandbox, sandbox, type Sandbox } from './helpers.js'
@@ -421,6 +421,29 @@ test('findClaudeDirs: TODAS as pastas do PATH com `claude`, o binário de verdad
   expect(findClaudeDir({ PATH: `${wrapperDir}:${realDir}` })).toBe(realDir)
   // só o script existe: serve (é o claude falso dos testes, ou uma instalação por script)
   expect(findClaudeDirs({ PATH: wrapperDir })).toEqual([wrapperDir])
+})
+
+test('plist: o PATH do watch leva também o PATH de quem instala e o do plist anterior (sessão retomada pelo watch herda este ambiente)', () => {
+  const sb = sandbox()
+  const plist = byFile(
+    planInstall(sb.paths, { runtimeBin: '/rt/bin/node', cliPath: CLI, claudeDir: '/real/bin', claudeDirs: ['/real/bin'], extraPath: ['/Users/x/.bun/bin', '/real/bin', 'relativo', '', '/opt/custom/bin'] }),
+    plistFile(sb.paths),
+  )
+  const path = /<key>PATH<\/key>\s*<string>([^<]*)<\/string>/.exec(plist.content)![1]!.split(':')
+  expect(path.slice(0, 2)).toEqual(['/real/bin', '/rt/bin']) // o claude de verdade continua na frente
+  expect(path).toContain('/Users/x/.bun/bin')
+  expect(path).toContain('/opt/custom/bin')
+  expect(path).not.toContain('relativo') // só caminhos absolutos
+  expect(path.filter((d) => d === '/real/bin')).toHaveLength(1) // sem repetir
+  expect(path).toContain('/usr/bin')
+})
+
+test('pathFromPlist: lê o PATH de um plist existente; ausente ou ilegível → []', () => {
+  const sb = sandbox()
+  const plan = planInstall(sb.paths, { runtimeBin: '/rt/bin/node', cliPath: CLI, claudeDir: '/real/bin', extraPath: ['/Users/x/.bun/bin'] })
+  expect(pathFromPlist(byFile(plan, plistFile(sb.paths)).content)).toContain('/Users/x/.bun/bin')
+  expect(pathFromPlist(null)).toEqual([])
+  expect(pathFromPlist('<plist>lixo')).toEqual([])
 })
 
 test('plist: o PATH do watch leva todas as pastas do claude, na ordem dada', () => {

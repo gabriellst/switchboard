@@ -30,6 +30,8 @@ export interface InstallPlanOptions {
   claudeDir: string
   /** todas as pastas do PATH com um `claude` (binário antes de invólucro); padrão: só `claudeDir` */
   claudeDirs?: string[]
+  /** pastas a mais para o PATH do watch (o PATH de quem instala + o do plist anterior); relativas e vazias são ignoradas */
+  extraPath?: string[]
 }
 
 /** Aspas simples para o shell (zsh/sh); caminho "limpo" fica como está, para a linha do zshrc ficar legível. */
@@ -64,7 +66,10 @@ function plistEnv(content: string): Record<string, string> {
  */
 function plistContent(p: Paths, o: InstallPlanOptions): string {
   const watchEnv = watchEnvOf(p)
-  const pathDirs = [...new Set([...(o.claudeDirs ?? [o.claudeDir]), dirname(o.runtimeBin), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'])]
+  // Depois do claude e do runtime vem o PATH de quem instala (e o do plist anterior): uma sessão que o `watch` retoma
+  // (`swap.autoResume`) herda ESTE ambiente; só com as pastas do sistema ela perderia o bun, o pnpm, o go… do usuário.
+  const extra = (o.extraPath ?? []).filter((d) => d.startsWith('/'))
+  const pathDirs = [...new Set([...(o.claudeDirs ?? [o.claudeDir]), dirname(o.runtimeBin), ...extra, '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'])]
   const log = join(p.stateDir, 'log', 'watch.out')
   const str = (s: string): string => `<string>${xmlEscape(s)}</string>`
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -202,6 +207,15 @@ export function stableRuntime(env: Record<string, string | undefined>, execPath:
 }
 
 /** Diretório do `claude`: `SWITCHBOARD_CLAUDE` (teste) ou o primeiro executável `claude` do PATH. */
+/** O PATH gravado num plist do watch (para não perder, ao reinstalar de um ambiente reduzido, o que já estava lá). */
+export function pathFromPlist(content: string | null): string[] {
+  if (content === null) return []
+  const m = /<key>PATH<\/key>\s*<string>([^<]*)<\/string>/.exec(content)
+  if (!m) return []
+  const unescape = (t: string): string => t.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
+  return unescape(m[1]!).split(':').filter((d) => d.startsWith('/'))
+}
+
 /** O arquivo começa com `#!`? (script: pode ser um invólucro que procura o claude de verdade noutra pasta do PATH) */
 function isScript(file: string): boolean {
   try {

@@ -1,8 +1,9 @@
-import { realpathSync } from 'node:fs'
+import { delimiter } from 'node:path'
+import { readFileSync, realpathSync } from 'node:fs'
 import { defineCommand } from 'citty'
 import { defaultCtx, type Ctx } from '../core/ctx.js'
 import { EXIT, SbError } from '../core/errors.js'
-import { findClaudeDir, findClaudeDirs, planInstall, runInstall, stableRuntime, type InstallResult } from '../core/install.js'
+import { findClaudeDir, findClaudeDirs, pathFromPlist, planInstall, plistFile, runInstall, stableRuntime, type InstallResult } from '../core/install.js'
 import { renderInstall } from '../report.js'
 import { guarded } from './guard.js'
 
@@ -23,7 +24,14 @@ export function installPreconditions(ctx: Ctx): void {
 }
 
 export function install(ctx: Ctx, opts: { simular: boolean }): InstallResult {
-  const plan = planInstall(ctx.paths, { ...selfCommand(ctx.env), claudeDir: findClaudeDir(ctx.env), claudeDirs: findClaudeDirs(ctx.env) })
+  let oldPlist: string | null = null
+  try {
+    oldPlist = readFileSync(plistFile(ctx.paths), 'utf8')
+  } catch {
+    // primeira instalação
+  }
+  const extraPath = [...(ctx.env.PATH ?? '').split(delimiter), ...pathFromPlist(oldPlist)]
+  const plan = planInstall(ctx.paths, { ...selfCommand(ctx.env), claudeDir: findClaudeDir(ctx.env), claudeDirs: findClaudeDirs(ctx.env), extraPath })
   return runInstall(ctx, plan, opts)
 }
 
