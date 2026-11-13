@@ -66,6 +66,20 @@ export const RESUME_PROMPT =
   'Comandos de fundo, monitores e agendamentos que estavam ativos foram encerrados no reinício: confira o que ainda é necessário e refaça.'
 
 /**
+ * A retomada por `claude --bg --resume <sessionId>` só é segura quando o id da conversa É o deste job: id do job = os 8
+ * primeiros caracteres do `sessionId`, e o job não é a continuação da conversa de outro (`resumeSessionId` ausente ou
+ * igual). Fora disso o claude resolve o id para OUTRO job (o original, ou uma cópia nova) e o acorda com as opções dele.
+ */
+function resumableById(s: Session): boolean {
+  const sid = s.agent.sessionId
+  if (!sid.startsWith(`${s.agent.id}-`)) return false
+  const own = s.job?.sessionId
+  if (own !== undefined && own !== sid) return false
+  const resume = s.job?.resumeSessionId
+  return resume === undefined || resume === sid
+}
+
+/**
  * A conta acabou DE VEZ: uma janela em >= 100 % (ou `rejected`) com o reset ainda no futuro. Não é o limiar de troca
  * (90 %/95 %, em que a conta ainda responde): aqui nenhum pedido passa até o reset, então quem está nela não trabalha.
  * Janela ausente (`resetsAt` 0) nunca conta; medição com erro ou velha também não.
@@ -306,7 +320,12 @@ export function restartStale(ctx: Ctx, cfg: Config, mux: string, opts: RestartOp
         if (reason === 'forced') note(ctx, `sessão ${id} (mux ${mux}) reiniciada mesmo com trabalho em andamento: a conta ${origin} acabou de vez; comandos de fundo e agendamentos dela foram encerrados`)
         // retomada: só quem estava presa no limite ou foi forçada (a livre fica parada, à espera de quem a abrir)
         if (cfg.swap.autoResume && reason !== 'free') {
-          if (resumeSession(ctx, fresh.agent.sessionId, fresh.agent.cwd, RESUME_PROMPT)) (out.resumed ??= []).push(id)
+          if (!resumableById(fresh)) {
+            // `--resume <id da conversa>` acordaria o job ORIGINAL dessa conversa (ou criaria uma cópia), com as opções
+            // DELE: sem o `--settings` do mux, a sessão voltaria calada no keychain (visto em 13/11/2026)
+            note(ctx, `sessão ${id} (mux ${mux}) parada mas NÃO retomada: ela continua a conversa de outro job e a retomada acordaria o outro, fora do sb; abra-a (claude attach ${id}) e peça para continuar`)
+            tell(ctx, 'switchboard', `Sessão ${id} (mux ${mux}) foi parada para trocar de conta. Abra-a e peça para continuar.`)
+          } else if (resumeSession(ctx, fresh.agent.sessionId, fresh.agent.cwd, RESUME_PROMPT)) (out.resumed ??= []).push(id)
           else note(ctx, `não consegui retomar a sessão ${id} (mux ${mux}); ela ficou parada: abra e peça para continuar`)
         }
       } catch (e) {

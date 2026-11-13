@@ -852,6 +852,38 @@ describe('conta de origem esgotada DE VEZ (>= 100 %): reinicia até quem tem tar
     expect(o.resumed).toEqual([IDS.b])
   })
 
+  test('sessão que CONTINUA a conversa de outra (resumeSessionId diferente) NÃO é retomada: o claude acordaria o job original, sem o --settings', async () => {
+    const sb = world()
+    addAll(sb)
+    origin(sb, 0.95)
+    withResume(sb, true)
+    // a limit-blocked `b` é, na verdade, a continuação da conversa de OUTRO job (aconteceu em 13/11/2026 com a "maquina b")
+    const p = join(sb.paths.jobsDir, IDS.b, 'state.json')
+    const st = JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>
+    st.sessionId = uuid(IDS.b)
+    st.resumeSessionId = 'abcdef99-0000-4000-8000-000000000000'
+    writeFileSync(p, JSON.stringify(st))
+    const o = doSwap(ctxAt(sb), await loadConfig(sb.paths), { mux: 'bk', to: 'admin1', reason: 'teste' })
+    expect(o.stopped).toEqual([IDS.a, IDS.b]) // para normalmente
+    expect(resumes(sb)).toEqual([]) // mas não manda o claude retomar por id de conversa
+    expect('resumed' in o).toBe(false)
+    expect(readFileSync(logFile(sb.paths, 'watch'), 'utf8')).toContain(`sessão ${IDS.b}`)
+  })
+
+  test('resumeSessionId igual ao da própria sessão (o caso comum) continua sendo retomada', async () => {
+    const sb = world()
+    addAll(sb)
+    origin(sb, 0.95)
+    withResume(sb, true)
+    const p = join(sb.paths.jobsDir, IDS.b, 'state.json')
+    const st = JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>
+    st.sessionId = uuid(IDS.b)
+    st.resumeSessionId = uuid(IDS.b)
+    writeFileSync(p, JSON.stringify(st))
+    const o = doSwap(ctxAt(sb), await loadConfig(sb.paths), { mux: 'bk', to: 'admin1', reason: 'teste' })
+    expect(o.resumed).toEqual([IDS.b])
+  })
+
   test('a retomada falhando não desfaz a parada nem lança: fica registrada no log, sem token', async () => {
     const sb = world()
     addAll(sb)

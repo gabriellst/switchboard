@@ -33,6 +33,8 @@ const JobStateSchema = z.looseObject({
   needs: opt(z.string()),
   detail: opt(z.string()),
   cwd: opt(z.string()),
+  sessionId: opt(z.string()),
+  resumeSessionId: opt(z.string()),
 })
 
 export interface JobState {
@@ -44,6 +46,10 @@ export interface JobState {
   needs?: string
   detail?: string
   cwd?: string
+  /** o id da conversa DESTE job */
+  sessionId?: string
+  /** o id da conversa que o job continua; difere de `sessionId` quando ele nasceu como retomada da conversa de outro job */
+  resumeSessionId?: string
   [extra: string]: unknown
 }
 

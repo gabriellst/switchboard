@@ -160,7 +160,7 @@ describe('opção antes do subcomando (raiz, mux, accounts): exit 3 e nenhum efe
     const sb = populatedSandbox()
     expect(sb.runSb(['--help']).code).toBe(0)
     expect(sb.runSb(['-h']).code).toBe(0)
-    expect(sb.runSb(['--version']).stdout.trim()).toBe('0.1.8')
+    expect(sb.runSb(['--version']).stdout.trim()).toBe('0.1.9')
     expect(sb.runSb(['mux', '--help']).code).toBe(0)
     expect(sb.runSb(['--bogus', '--help']).code).toBe(0) // ajuda não tem efeito
     expect(sb.runSb(['mux', 'list', '--json']).code).toBe(0)
@@ -209,7 +209,7 @@ describe('formas documentadas continuam valendo', () => {
       expect(r.code).toBe(0)
       expect(r.stdout + r.stderr).toContain('USAGE')
     }
-    expect(sb.runSb(['--version']).stdout.trim()).toBe('0.1.8')
+    expect(sb.runSb(['--version']).stdout.trim()).toBe('0.1.9')
     expect(sb.runSb(['swap', 'bk', '--version']).code).toBe(EXIT.USAGE) // --version só vale sozinho
   })
 

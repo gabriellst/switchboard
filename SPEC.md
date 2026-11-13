@@ -165,7 +165,9 @@ trabalho agendado → `scheduled`; presa por limite (`blocked` com `needs` come�
   conta ainda responde e nada disso vale.
 - **`swap.autoResume`** (padrão `false`): a sessão parada por estar presa no limite, ou reiniciada à força, é retomada
   com `claude --bg --resume <sessionId> <pedido de continuar>` (mesmo id, opções salvas, já na conta nova). A que
-  estava livre fica parada.
+  estava livre fica parada. Só é retomada a sessão cujo id de conversa é o do próprio job; a que continua a conversa de
+  outro job (`resumeSessionId` diferente) fica parada com aviso, porque `--resume` acordaria o job original, sem o
+  `--settings` do mux (no keychain).
 - `free` e `limit-blocked` → `claude stop` (com a atividade reconferida com dados frescos logo antes;
   só vale se a entrada some de `agents` depois). `busy` → `waitingBusy`. `scheduled` → `keptScheduled`,
   nunca parada; se a conta de origem está esgotada, avisa **uma vez** por sessão.
