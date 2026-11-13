@@ -76,12 +76,15 @@ export function hasScheduledWork(job: JobState | null, agent: AgentEntry): boole
 }
 
 /**
- * Parada por limite de uso: viva, `blocked` com `needs` começando por `rate limited`, nenhuma tarefa em curso e o
- * host não `busy`. `queued` pode ser 1 (o item que espera o reset). Sem `pid` nunca: o estado do job é obsoleto.
+ * Parada por limite de uso: viva, `blocked` com `needs` começando por `rate limited`. O turno dela não anda até o reset
+ * da conta, então reiniciá-la numa conta com folga não interrompe trabalho do turno. `tasks > 0` e `status busy` NÃO
+ * seguram: são comandos/subagentes de fundo (`local_bash`, `local_agent`) que ficaram rodando com o turno parado
+ * (visto em 13/11/2026: três sessões presas dias numa conta esgotada por causa disso); eles morrem no reinício.
+ * Trabalho AGENDADO (cron/monitor/wake) é decidido antes, em `activityOf`, e continua não sendo parado.
+ * Exige `inFlight` legível (falha fechada). Sem `pid` nunca: o estado do job é obsoleto.
  */
 export function isLimitBlocked(s: Session): boolean {
-  const f = s.job?.inFlight
-  return s.live && s.job?.state === 'blocked' && (s.job.needs?.startsWith('rate limited') ?? false) && f != null && f.tasks === 0 && s.agent.status !== 'busy'
+  return s.live && s.job?.state === 'blocked' && (s.job.needs?.startsWith('rate limited') ?? false) && s.job.inFlight != null
 }
 
 /**
@@ -89,7 +92,7 @@ export function isLimitBlocked(s: Session): boolean {
  * chamou); VIVA sem job legível (`job == null`: state.json ausente, malformado ou de formato novo) → `busy` (pode ter
  * cron/monitor/wake que não conseguimos ver: nunca parar o que não dá para ler); VIVA com job legível mas SEM `inFlight`
  * → `busy` (mesma razão: falha fechada); trabalho agendado → `scheduled`;
- * limite → `limit-blocked`; `status busy`/`tasks`/`queued` → `busy`; senão `free`.
+ * limite → `limit-blocked` (mesmo com tarefas de fundo ou `status busy`); `status busy`/`tasks`/`queued` → `busy`; senão `free`.
  */
 export function activityOf(s: Session, callerJobId?: string): Activity {
   if (!s.live) return 'stopped'

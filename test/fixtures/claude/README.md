@@ -21,7 +21,7 @@ Cada `jobs/<id>/state.json` imita `~/.claude/jobs/<id>/state.json`.
 | `c3d4e5f6` | stopped: sem `pid`, sem `inFlight`, com `lastTerminalAt` | F8, F14 (stop reescreve o `state.json`) | Task 14 contrato (`inFlight` ausente); Task 15 caso stopped | `stopped` |
 | `d4e5f6a7` | limit-blocked **parada** (limite de 5 h), sem `pid`: `blocked`, `queued 1`, `needs` `rate limited…` | F12, RESULTADOS §1 | Task 14 contrato (parser); Task 15 caso stopped | `stopped` (sem `pid`; a regra limit-blocked só vale para sessão viva) |
 | `e5f6a7b8` | limit-blocked viva e ociosa (limite semanal): `blocked`, `idle`, `tasks 0`, `queued 1` | F12 (tabela de §1) | Task 15 `activityOf` (a que decide a troca) | `limit-blocked` |
-| `f6a7b8c9` | limit-blocked viva com `tasks 4` (`local_agent`, `local_bash`), `busy` | F12: `tasks > 0` continua `busy` | Task 15 `activityOf` | `busy` (`hasScheduledWork` = não: `kinds` não vazio, mas só `local_*`; não é limit-blocked) |
+| `f6a7b8c9` | limit-blocked viva com `tasks 4` (`local_agent`, `local_bash`), `busy` | 13/11/2026: travada por limite com tarefas de fundo é `limit-blocked` (reiniciável); antes era `busy` e ficava presa | Task 15 `activityOf` | `limit-blocked` (`hasScheduledWork` = não: `kinds` não vazio, mas só `local_*`; travada por limite, as tarefas de fundo não seguram) |
 | `11aa22bb` | scheduled-loop: `kinds ["session_cron"]`, `selfWake true` | F13 | Task 15 `hasScheduledWork` = sim | `scheduled` |
 | `22bb33cc` | scheduled-wakeup: `session_cron` + `inFlight.wake {at, reason, fires}` | F13 | Task 15 `hasScheduledWork` = sim | `scheduled` |
 | `33cc44dd` | scheduled-monitor: `kinds ["monitor"]`, `fan[]`, `status busy` | F13 | Task 15 `hasScheduledWork` = sim | `scheduled` (vem antes de `busy`) |

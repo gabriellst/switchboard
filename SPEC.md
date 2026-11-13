@@ -150,7 +150,7 @@ O retorno no reset sai de graça: quando a preferida volta a estar disponível, 
 **`restartStale`** só considera sessão **viva** (tem `pid`), do mux, com `startedAt < since`. Atividade
 (`activityOf`), por precedência: sem `pid` → `stopped`; é a que chamou (`CLAUDE_JOB_DIR`) → `busy`;
 viva sem `state.json` legível → `busy`; `state.json` legível sem `inFlight` → `busy` (falha fechada);
-trabalho agendado → `scheduled`; presa por limite → `limit-blocked`; `status busy`, `tasks > 0` ou
+trabalho agendado → `scheduled`; presa por limite (`blocked` com `needs` começando por `rate limited`) → `limit-blocked`, mesmo com `status busy` ou `tasks > 0` (comandos e subagentes de fundo não seguram: o turno não anda até o reset, e eles são encerrados no reinício); `status busy`, `tasks > 0` ou
 `queued > 0` → `busy`; senão `free`.
 
 - `hasScheduledWork` = `pid` e `inFlight` e (`kinds` ∋ `session_cron` ou ∋ `monitor` ou `wake` ≠ null).

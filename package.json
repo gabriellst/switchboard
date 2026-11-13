@@ -1,6 +1,6 @@
 {
 	"name": "switchboard",
-	"version": "0.1.5",
+	"version": "0.1.6",
 	"description": "Contas do Claude Code por pasta, com troca automática ao bater o limite",
 	"type": "module",
 	"license": "MIT",

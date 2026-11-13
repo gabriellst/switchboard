@@ -34,7 +34,7 @@ const EXPECTED: Record<string, Activity> = {
   c3d4e5f6: 'stopped', // sem pid
   d4e5f6a7: 'stopped', // limite, mas sem pid: estado obsoleto
   e5f6a7b8: 'limit-blocked', // viva, ociosa, tasks 0, queued 1
-  f6a7b8c9: 'busy', // limite, mas tasks 4
+  f6a7b8c9: 'limit-blocked', // limite com tasks 4 (comandos/subagentes de fundo): o turno não anda, pode reiniciar
   '11aa22bb': 'scheduled', // session_cron
   '22bb33cc': 'scheduled', // session_cron + wake
   '33cc44dd': 'scheduled', // monitor (antes de busy)
@@ -125,7 +125,7 @@ describe('fixtures de test/fixtures/claude: Activity do README', () => {
     expect(has('33cc44dd')).toBe(true)
     expect(isLimitBlocked(by.get('e5f6a7b8')!)).toBe(true)
     expect(isLimitBlocked(by.get('d4e5f6a7')!)).toBe(false) // parada: sem pid
-    expect(isLimitBlocked(by.get('f6a7b8c9')!)).toBe(false) // tasks 4
+    expect(isLimitBlocked(by.get('f6a7b8c9')!)).toBe(true) // tasks 4 não segura mais (visto em 13/11/2026: 3 sessões presas assim)
   })
 })
 
@@ -168,15 +168,15 @@ describe('hasScheduledWork', () => {
 describe('isLimitBlocked', () => {
   const blocked = (f = inFlight({ queued: 1 })) => jobWith({ state: 'blocked', needs: 'rate limited — wait and retry · resets 20:00', inFlight: f })
 
-  test('viva, bloqueada por limite, tasks 0, ociosa (queued 1) → true', () => {
+  test('viva, bloqueada por limite → true: ociosa, com status busy ou com tarefas de fundo', () => {
     expect(isLimitBlocked(session({}, blocked()))).toBe(true)
+    expect(isLimitBlocked(session({ status: 'busy' }, blocked()))).toBe(true)
+    expect(isLimitBlocked(session({ status: 'busy' }, blocked(inFlight({ tasks: 5, queued: 1, kinds: ['local_bash'] }))))).toBe(true)
     expect(isLimitBlocked(session({}, blocked(inFlight())))).toBe(true) // queued 0 também
   })
 
   test.each([
     ['sem pid', session(noPid, blocked())],
-    ['status busy', session({ status: 'busy' }, blocked())],
-    ['tasks > 0', session({}, blocked(inFlight({ tasks: 4, kinds: ['local_agent'] })))],
     ['state running', session({}, jobWith({ state: 'running', needs: 'rate limited', inFlight: inFlight() }))],
     ['needs de outra coisa', session({}, jobWith({ state: 'blocked', needs: 'permission to run X', inFlight: inFlight() }))],
     ['needs ausente', session({}, jobWith({ state: 'blocked', inFlight: inFlight() }))],
@@ -202,8 +202,13 @@ describe('activityOf (precedência)', () => {
     expect(activityOf(session({}, limit))).toBe('limit-blocked')
   })
 
-  test('limit-blocked com tasks > 0 é busy', () => {
-    expect(activityOf(session({ status: 'busy' }, jobWith({ ...limit, inFlight: inFlight({ tasks: 4, kinds: ['local_agent', 'local_bash'] }) })))).toBe('busy')
+  test('limit-blocked com tasks > 0 e status busy continua limit-blocked (o turno está parado no limite; só o fundo roda)', () => {
+    expect(activityOf(session({ status: 'busy' }, jobWith({ ...limit, inFlight: inFlight({ tasks: 4, queued: 1, kinds: ['local_agent', 'local_bash'] }) })))).toBe('limit-blocked')
+    expect(activityOf(session({ status: 'busy' }, jobWith({ ...limit, inFlight: inFlight({ tasks: 8, kinds: ['local_bash'] }) })))).toBe('limit-blocked')
+  })
+
+  test('limite + trabalho AGENDADO (cron/monitor) continua scheduled: não se para', () => {
+    expect(activityOf(session({ status: 'busy' }, jobWith({ ...limit, inFlight: inFlight({ tasks: 1, kinds: ['session_cron'] }) })))).toBe('scheduled')
   })
 
   test('sessão que chamou é busy mesmo livre, agendada ou limit-blocked', () => {
