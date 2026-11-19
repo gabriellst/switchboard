@@ -95,7 +95,8 @@ const AgentSchema = z.looseObject({
 /** Uma entrada de `claude agents --json --all`. `pid`/`status` só existem em sessão viva; chaves extras são toleradas. */
 export type AgentEntry = z.infer<typeof AgentSchema>
 
-const AgentListSchema = z.array(AgentSchema)
+/** O mínimo que toda entrada precisa ter para o `sb` decidir se ela é dele: um objeto com `kind` em texto. */
+const EntryKindSchema = z.looseObject({ kind: z.string() })
 
 const TOKEN_RE = /sk-ant-[A-Za-z0-9_-]+/g
 
@@ -117,7 +118,15 @@ function describeIssue(issue: z.core.$ZodIssue): string {
   return `${where}: campo \`${String(field)}\` ausente ou com tipo inesperado`
 }
 
-/** `claude agents --json --all` (cwd = HOME, ambiente limpo). Formato inesperado → `SbError` exit 4. */
+/**
+ * `claude agents --json --all` (cwd = HOME, ambiente limpo). Formato inesperado → `SbError` exit 4.
+ *
+ * A validação é POR ENTRADA. As sessões `background` (as únicas que o `sb` para, reinicia e fixa) seguem o schema
+ * inteiro: uma delas fora do formato derruba a lista (falha fechada: sumir da lista contaria como "parada"). Entradas
+ * de outro tipo que não seguem o schema são PULADAS: desde o claude 2.1.32x as abas de terminal (`kind: "interactive"`)
+ * vêm sem `id` e sem `state`, e rejeitar a lista inteira por causa delas deixava o `watch` sem trocar a conta de
+ * nenhuma sessão enquanto houvesse uma aba aberta (incidente de 19/11/2026).
+ */
 export function listAgents(ctx: Ctx): AgentEntry[] {
   const r = ctx.run(realClaudeBin(ctx.env), ['agents', '--json', '--all'], { cwd: ctx.paths.home, env: cleanEnv(ctx.env), timeoutMs: 30_000 })
   if (r.status !== 0) {
@@ -130,11 +139,19 @@ export function listAgents(ctx: Ctx): AgentEntry[] {
   } catch {
     throw new SbError(`\`claude agents --json --all\` não devolveu JSON (começa com: ${JSON.stringify(excerpt(r.stdout, 40))}); ${DOCTOR}`, EXIT.CLAUDE)
   }
-  const parsed = AgentListSchema.safeParse(data)
-  if (!parsed.success) {
-    throw new SbError(`formato inesperado em \`claude agents --json --all\` (${describeIssue(parsed.error.issues[0]!)}); ${DOCTOR}`, EXIT.CLAUDE)
-  }
-  return parsed.data
+  const unexpected = (issue: z.core.$ZodIssue): SbError =>
+    new SbError(`formato inesperado em \`claude agents --json --all\` (${describeIssue(issue)}); ${DOCTOR}`, EXIT.CLAUDE)
+  if (!Array.isArray(data)) throw unexpected({ code: 'invalid_type', expected: 'array', path: [], message: '' } as z.core.$ZodIssue)
+  const out: AgentEntry[] = []
+  data.forEach((raw: unknown, i) => {
+    const kind = EntryKindSchema.safeParse(raw)
+    if (!kind.success) throw unexpected({ ...kind.error.issues[0]!, path: [i, ...kind.error.issues[0]!.path] })
+    const entry = AgentSchema.safeParse(raw)
+    if (entry.success) out.push(entry.data)
+    else if (kind.data.kind === 'background') throw unexpected({ ...entry.error.issues[0]!, path: [i, ...entry.error.issues[0]!.path] })
+    // outro tipo fora do formato (aba interativa sem `id`/`state`): o sb não gerencia, pula
+  })
+  return out
 }
 
 /** Id curto de sessão do daemon: 8 hex minúsculos. Validado antes de qualquer processo ou caminho. */

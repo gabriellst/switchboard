@@ -186,9 +186,10 @@ describe('listAgents', () => {
   })
 
   test.each([
-    ['campo obrigatório ausente', { cwd: '/a', kind: 'k', startedAt: 1, sessionId: 's', name: 'n', state: 'done' }, 'id'],
-    ['startedAt com tipo errado', { id: 'a1b2c3d4', cwd: '/a', kind: 'k', startedAt: '1', sessionId: 's', name: 'n', state: 'done' }, 'startedAt'],
-    ['pid com tipo errado', { id: 'a1b2c3d4', cwd: '/a', kind: 'k', startedAt: 1, sessionId: 's', name: 'n', state: 'done', pid: 'x' }, 'pid'],
+    ['campo obrigatório ausente', { cwd: '/a', kind: 'background', startedAt: 1, sessionId: 's', name: 'n', state: 'done' }, 'id'],
+    ['startedAt com tipo errado', { id: 'a1b2c3d4', cwd: '/a', kind: 'background', startedAt: '1', sessionId: 's', name: 'n', state: 'done' }, 'startedAt'],
+    ['pid com tipo errado', { id: 'a1b2c3d4', cwd: '/a', kind: 'background', startedAt: 1, sessionId: 's', name: 'n', state: 'done', pid: 'x' }, 'pid'],
+    ['entrada sem kind', { id: 'a1b2c3d4', cwd: '/a', startedAt: 1, sessionId: 's', name: 'n', state: 'done' }, 'kind'],
     ['entrada que não é objeto', 'texto', 'entrada'],
   ])('entrada inesperada (%s) → exit 4 nomeando o campo', (_name, entry, field) => {
     const sb = sandbox()
@@ -197,6 +198,43 @@ describe('listAgents', () => {
     expect(e.exit).toBe(EXIT.CLAUDE)
     expect(e.message).toContain(field)
     expect(e.message).toContain('sb doctor')
+  })
+
+  // Forma REAL de uma aba de terminal no claude 2.1.32x (19/11/2026): sem `id` e sem `state`. Antes ela derrubava a
+  // lista inteira e o watch não trocava a conta de nenhuma sessão enquanto houvesse uma aba aberta.
+  const INTERACTIVE = {
+    pid: 86385,
+    cwd: '/Users/x/proj',
+    kind: 'interactive',
+    startedAt: 1795110000000,
+    sessionId: 'cdcf5dfa-c4e8-4006-ab87-ed8334978b99',
+    name: 'proj-19',
+    status: 'busy',
+  }
+
+  test('aba interativa sem id/state é pulada; as sessões em segundo plano continuam na lista', () => {
+    const sb = sandbox()
+    const raw = JSON.parse(AGENTS_TEXT) as Record<string, unknown>[]
+    writeFake(sb, 'agents.json', JSON.stringify([...raw.slice(0, 2), INTERACTIVE, { ...INTERACTIVE, status: 'waiting', waitingFor: 'x' }, ...raw.slice(2)]))
+    const list = listAgents(sb.ctx())
+    expect(list.map((a) => a.id)).toEqual(raw.map((a) => a.id as string))
+  })
+
+  test('entrada de outro tipo que segue o formato continua na lista', () => {
+    const sb = sandbox()
+    const other = { id: 'e1e2e3e4', cwd: '/a', kind: 'interactive', startedAt: 1, sessionId: 's', name: 'n', state: 'working' }
+    writeFake(sb, 'agents.json', JSON.stringify([other]))
+    expect(listAgents(sb.ctx()).map((a) => a.id)).toEqual(['e1e2e3e4'])
+  })
+
+  test('sessão background fora do formato ainda derruba a lista, mesmo com uma aba interativa antes dela', () => {
+    const sb = sandbox()
+    const bad = { cwd: '/a', kind: 'background', startedAt: 1, sessionId: 's', name: 'n', state: 'done' }
+    writeFake(sb, 'agents.json', JSON.stringify([INTERACTIVE, bad]))
+    const e = sbError(() => listAgents(sb.ctx()))
+    expect(e.exit).toBe(EXIT.CLAUDE)
+    expect(e.message).toContain('entrada 2')
+    expect(e.message).toContain('id')
   })
 
   test('saída que não é JSON → exit 4, trecho curto e sem token', () => {
